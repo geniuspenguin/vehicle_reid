@@ -19,8 +19,3 @@ class r50ibn_reid_cls(nn.Module):
         f = self.bn1(x)
         p = self.fc_cls(f)
         return f, p
-
-
-x = torch.randn((5, 3, 224, 224))
-net = r50ibn_reid_cls(0,0)
-net(x)
