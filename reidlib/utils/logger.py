@@ -1,14 +1,24 @@
 from torch.utils.tensorboard import SummaryWriter
+import time
 
-class Logger:
-    def __init__(self, path='./runs'):
-        self.writer = SummaryWriter(log_dir=path)
-        self.add_text = self.writer.add_text
-        self.add_scalar = self.writer.add_scalar
 
-    def log_and_print(self, tag, text):
-        self.add_text(tag, text)
+def time_passed(start, end, rnd=1):
+    return round(end - start, rnd)
+
+
+class Logger(SummaryWriter):
+    def info(self, tag, text, time_report=True):
+        if time_report:
+            text = time.strftime("%H:%M:%S {}: ".format(
+                tag), time.localtime()) + text
+        super().add_text(tag, text)
         print('{:>8}:{}'.format(tag, text))
+
+    def add_text(self, tag, text, time_report=True):
+        if time_report:
+            text = time.strftime("%H:%M:%S {}: ".format(
+                tag), time.localtime()) + text
+        super().add_text(tag, text)
 
 # if __name__ == '__main__':
 #     import numpy as np
@@ -18,5 +28,5 @@ class Logger:
 #         logger.add_scalar('Loss/test', np.random.random(), n_iter)
 #         logger.add_scalar('Accuracy/train', np.random.random(), n_iter)
 #         logger.add_scalar('Accuracy/test', np.random.random(), n_iter)
-#         logger.add_text(str(n_iter), str(n_iter) + 'step')
-#         logger.log_and_print('test', str(n_iter)+'th')
+#         logger.add_text('train', str(n_iter) + 'step, loss')
+#         logger.info('test', str(n_iter)+'acc')

@@ -32,7 +32,7 @@ class Veri776(data.Dataset):
         self.path = path
         self.sample_to_path, self.label_to_samples, self.sample_to_label, self.sample_to_cid \
             = generate_idmap(
-            path)
+                path)
         self.transforms = transforms
 
     def __getitem__(self, idx):
