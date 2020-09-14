@@ -2,6 +2,7 @@ import torch
 from torch.utils.data.sampler import Sampler
 import numpy as np
 import itertools
+import copy
 
 # Both samplers are passed a data_source (likely your dataset) that has following members:
 # * label_to_samples - mapping of label ids (zero based integer) to samples for that label
@@ -59,6 +60,7 @@ class PKSampler_coverage(Sampler):
                     yield j
 
     def __len__(self):
-        num_labels = len(self.data_source.label_names)
+        num_labels = self.data_source.nr_id
         samples = ((num_labels - 1) // self.p + 1) * self.p * self.k
         return samples
+

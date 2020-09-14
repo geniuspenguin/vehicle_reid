@@ -1,29 +1,18 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-def get_L2distance_matrix(a: torch.tensor, b: torch.tensor, sqrt=True, epsilon=1):
-    # a(A, X) b(B, X)
-    ab = torch.matmul(a, b.t())
-    a_square = (a ** 2).sum(axis=1, keepdims=True)
-    b_square = (b ** 2).sum(axis=1, keepdims=True).permute((1, 0))
-    square_l2 = a_square + b_square - 2*ab
-    square_l2 = square_l2.clamp(min=0)
-    if sqrt:
-        l2 = torch.sqrt(square_l2)
-        return l2
-    return square_l2
+from reidlib.utils.metrics import get_L2distance_matrix
 
 
 def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True, valid_ap=None):
+    # test_q = qry.unsqueeze(0).expand(qry.shape[0], gry.shape[0], qry.shape[1]).reshape(-1, qry.shape[1])
+    # test_g = gry.unsqueeze(1).expand(gry.shape[0], qry.shape[0],qry.shape[1]).reshape(-1, qry.shape[1])
+    # distance = F.pairwise_distance(test_q, test_g).reshape(qry.shape[0], gry.shape[0])
     distance = get_L2distance_matrix(qry, gry, sqrt)
-    print(distance, distance.dtype)
     positive_mask = (q_ids.reshape(-1, 1) == g_ids.reshape(1, -1)).float()
     negative_mask = 1 - positive_mask
     if not valid_ap and qry.shape[0] == gry.shape[0]:
         valid_ap = 1 - torch.diag(torch.ones(qry.shape[0]))
-        print(type(positive_mask))
         if positive_mask.is_cuda:
             valid_ap = valid_ap.cuda()
         positive_mask = valid_ap * positive_mask
@@ -33,11 +22,11 @@ def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True, valid_ap=None)
     dist_an = distance * negative_mask
     max_dist_an = dist_an.max()
     dist_an = distance * negative_mask + max_dist_an * (1 - negative_mask)
-    dist_an_hard = dist_an.min(axis=1, keepdims=False)[1]
+    dist_an_hard = dist_an.min(axis=1, keepdims=False)[0]
 
-    tri = (dist_an_hard - dist_ap_hard + margin).clamp(min=0)
+    tri = (dist_ap_hard - dist_an_hard + margin).clamp(min=0)
     tri_loss = tri.mean()
-    return tri_loss
+    return tri_loss, dist_ap_hard.mean(), dist_an_hard.mean()
 
 
 # def triplet_hard_loss(feat, labels, margin, sqrt=True):
@@ -45,13 +34,19 @@ def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True, valid_ap=None)
 
 class triplet_hard_loss(nn.Module):
     def __init__(self, margin=0.25, sqrt=True):
+        super().__init__()
         self.margin = margin
         self.sqrt = sqrt
+        self.dist_ap_hard = None
+        self.dist_an_hard = None
 
-    def foward(self, x, labels):
-        loss = _triplet_hard_loss(
+    def forward(self, x, labels):
+        loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss(
             x, x, labels, labels, margin=self.margin, sqrt=self.sqrt)
         return loss
+    
+    def get_mean_hard_dist(self):
+        return self.dist_ap_hard, self.dist_an_hard
 
 
 class CenterLoss(nn.Module):
@@ -85,7 +80,7 @@ class CenterLoss(nn.Module):
         distmat = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(
             batch_size, self.num_classes) + torch.pow(self.centers, 2).sum(
                 dim=1, keepdim=True).expand(self.num_classes, batch_size).t()
-        distmat.addmm_(1, -2, x, self.centers.t())
+        distmat.addmm_(x, self.centers.t(), beta=1, alpha=-2)
 
         classes = torch.arange(self.num_classes, device=x.device).long()
         labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)
@@ -100,3 +95,17 @@ class CenterLoss(nn.Module):
         dist = torch.cat(dist)
         loss = dist.mean()
         return loss
+
+if __name__ == '__main__':
+    la = torch.tensor([1, 1, 2, 2, 3, 3, 4, 4])
+    a = torch.tensor([
+        [1, 0, 0],
+        [0, 3, 0],
+        [0, 0, 0],
+        [1, 1, 0],
+        [1, 10,0],
+        [0, 0, 0]
+    ], dtype=torch.float32)
+    la = torch.tensor([1,1,1,2,2,2])
+    lossfunc_my = triplet_hard_loss()
+    loss = lossfunc_my(a, la)
