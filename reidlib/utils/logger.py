@@ -37,6 +37,8 @@ class Logger(SummaryWriter):
         stage_print = '[{}]'.format(stage_str) if stage_str else ''
         stage_print = colored(stage_print, self.stage_color)
 
+        text = stage_str + text
+
         print('{}{}{}{}'.format(clock_print, tag_print, stage_print, text))
         super().add_text(tag, '{}{}'.format(clock, text))
 

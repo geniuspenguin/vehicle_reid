@@ -29,8 +29,8 @@ class Config:
     weight_center = 0.0005
 
     batch_per_log = 1
-    epoch_per_test = 1
-    epoch_per_save = 1
+    epoch_per_test = 5
+    epoch_per_save = 5
 
     nr_query = 1678
     nr_gallery = 11579
