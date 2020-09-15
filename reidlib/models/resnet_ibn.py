@@ -225,8 +225,8 @@ class ResNet_IBN(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
 
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
+        # x = self.avgpool(x)
+        # x = x.view(x.size(0), -1)
         # x = self.fc(x)
 
         return x
@@ -278,7 +278,7 @@ def resnet50_ibn_a(pretrained=False, **kwargs):
         model.load_state_dict(
             torch.load(
                 model_path['resnet50_ibn_a']),
-            strict=False)
+                strict=False)
     return model
 
 

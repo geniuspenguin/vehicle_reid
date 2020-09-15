@@ -1,58 +1,52 @@
 import torch.utils.data as data
 from glob import glob
-import collections
+from collections import defaultdict
 import os
 import cv2
 from PIL import Image
+import pickle
 
 train_path = '/home/peng/Documents/data/VeRi/image_train'
 query_path = '/home/peng/Documents/data/VeRi/image_query'
 gallery_path = '/home/peng/Documents/data/VeRi/image_test'
+pickle_path = '/home/peng/Documents/data/VeRi/data_info.pkl'
 
-
-def generate_idmap(folder):
-    names = glob(os.path.join(folder, '*.jpg'))
-    idx_to_path, labelid_to_idxs = {}, collections.defaultdict(list)
-    label_to_labelid = {}
-    idx_to_labelid = {}
-    idx_to_cid = {}
-    camera_to_cid = {}
-    for i, path in enumerate(names):
-        idx_to_path[i] = path
-        parts = path.split('/')[-1].split('_')
-        label = parts[0]
-        camera = parts[1]
-        if label not in label_to_labelid:
-            label_to_labelid[label] = len(label_to_labelid)
-        if camera not in camera_to_cid:
-            camera_to_cid[camera] = len(camera_to_cid)
-        labelid = label_to_labelid[label]
-        labelid_to_idxs[labelid].append(i)
-        idx_to_labelid[i] = labelid
-        idx_to_cid[i] = camera_to_cid[camera]
-    return idx_to_path, labelid_to_idxs, idx_to_labelid, idx_to_cid, camera_to_cid
-
+def generate_id_map(data_info):
+    vid2ivid = {}
+    sample2sid = {}
+    infos = []
+    ivid2sids = defaultdict(list)
+    for name, info in data_info.items():
+        if name not in sample2sid:
+            sample2sid[name] = len(sample2sid)
+        sid = sample2sid[name]
+        vid = info['vehicleID']
+        if vid not in vid2ivid:
+            vid2ivid[vid] = len(vid2ivid)
+        ivid = vid2ivid[vid]
+        info.update({'sid': sid, 'ivid': ivid})
+        infos.append(info)
+        ivid2sids[ivid].append(sid)
+    return infos, ivid2sids
+    
 
 class Veri776_train(data.Dataset):
-    def __init__(self, path=train_path, transforms=None, attr_mode=False):
+    def __init__(self, pickle_path=pickle_path, transforms=None):
         super().__init__()
-        self.path = path
-        self.sample_to_path, self.label_to_samples, self.sample_to_label, self.sample_to_cid, self.camera_to_cid \
-            = generate_idmap(
-                path)
+        self.pickle_path = pickle_path
+        self.sample_info = pickle.load(open(pickle_path, 'rb'))['train']
+        self.metas, self.label_to_samples = generate_id_map(self.sample_info)
+
         self.transforms = transforms
         self.nr_id = len(self.label_to_samples)
-        self.nr_sample = len(self.sample_to_label)
+        self.nr_sample = len(self.metas)
         print('veri776: {} imgs with {} ids'.format(self.nr_sample, self.nr_id))
-
-        self.attr_mode = attr_mode
-        if self.attr_label:
             
 
     def __getitem__(self, idx):
-        path = self.sample_to_path[idx]
-        label = self.sample_to_label[idx]
-        cid = self.sample_to_cid[idx]
+        path = self.metas[idx]['path']
+        label = self.metas[idx]['ivid']
+        cid = self.metas[idx]['cameraID']
         # img = cv2.imread(path)
         img = Image.open(path).convert('RGB')
         if self.transforms:
@@ -64,26 +58,42 @@ class Veri776_train(data.Dataset):
 
 
 class Veri776_test(data.Dataset):
-    def __init__(self, query_path=query_path,
-                 gallery_path=gallery_path, transforms=None):
-        self.q_path = query_path
-        self.g_path = gallery_path
-        self.idx_to_path, _, self.idx_to_label, self.idx_to_cid, self.camera_to_cid = generate_idmap(
-            self.q_path)
-        self.nr_query = len(self.idx_to_path)
-        g_idx_to_path, _, g_idx_to_label, g_idx_to_cid, g_camera_to_cid = generate_idmap(
-            self.g_path)
-        self.nr_gallery = len(g_idx_to_path)
-        self.idx_to_path.update(g_idx_to_path)
-        self.idx_to_label.update(g_idx_to_label)
-        self.idx_to_cid.update(g_idx_to_cid)
-        self.camera_to_cid.update(g_camera_to_cid)
+    def __init__(self, pickle_path=pickle_path, transforms=None):
+        self.pickle_path = pickle_path
+        infos = pickle.load(open(pickle_path, 'rb'))
+        self.q_info = infos['query']
+        self.g_info = infos['gallery']
+        self.test = self.relabel(self.q_info, self.g_info)
         self.transforms = transforms
 
+    def relabel(self, q_infos, g_infos):
+        vid2ivid = {}
+        infos = []
+        for _, info in q_infos.items():
+            vid = info['vehicleID']
+            if vid not in vid2ivid:
+                vid2ivid[vid] = len(vid2ivid)
+            ivid = vid2ivid[vid]
+            sid = len(infos)
+            info['ivid'] = ivid
+            info['sid'] = sid
+            infos.append(info)
+
+        for _, info in g_infos.items():
+            vid = info['vehicleID']
+            if vid not in vid2ivid:
+                vid2ivid[vid] = len(vid2ivid)
+            ivid = vid2ivid[vid]
+            sid = len(infos)
+            info['ivid'] = ivid
+            info['sid'] = sid
+            infos.append(info)
+        return infos
+
     def __getitem__(self, idx):
-        path = self.idx_to_path[idx]
-        label = self.idx_to_label[idx]
-        cid = self.idx_to_cid[idx]
+        path = self.test[idx]['path']
+        label = self.test[idx]['ivid']
+        cid = self.test[idx]['cameraID']
 
         img = Image.open(path).convert('RGB')
         if self.transforms:
@@ -91,13 +101,13 @@ class Veri776_test(data.Dataset):
         return img, label, cid
 
     def __len__(self):
-        return len(self.idx_to_path)
+        return len(self.test)
 
     def get_num_query(self):
-        return self.nr_query
+        return len(self.q_info)
 
     def get_num_gallery(self):
-        return self.nr_gallery
+        return (self.g_info)
 
 # def collate_func(batch):
 #     inps, targets, cids = [], [], []

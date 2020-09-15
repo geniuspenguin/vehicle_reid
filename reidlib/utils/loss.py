@@ -82,7 +82,7 @@ class CenterLoss(nn.Module):
                 dim=1, keepdim=True).expand(self.num_classes, batch_size).t()
         distmat.addmm_(x, self.centers.t(), beta=1, alpha=-2)
 
-        classes = torch.arange(self.num_classes, device=x.device).long()
+        classes = torch.arange(self.num_classes, device=x.device)
         labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)
         mask = labels.eq(classes.expand(batch_size, self.num_classes))
 

@@ -5,7 +5,7 @@ import math
 from torchvision import models 
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo 
-from .weight_init import weights_init_kaiming, weights_init_classifier
+from reidlib.models.weight_init import weights_init_kaiming, weights_init_classifier
 
 class Baseline(nn.Module):
     in_planes = 2048

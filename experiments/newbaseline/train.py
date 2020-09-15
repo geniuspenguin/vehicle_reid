@@ -3,7 +3,7 @@ from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
 from reidlib.models.resnet_ibn import resnet50_ibn_a
-from reidlib.utils.loss import triplet_hard_loss, CenterLoss
+from reidlib.utils.loss import triplet_hard_loss
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
 from model import Baseline
@@ -15,6 +15,7 @@ import os
 from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
+import torch.cuda.amp as amp
 
 batch_step = 1
 logger = Logger(log_dir=Config.log_dir)
@@ -68,6 +69,7 @@ def parm_list_with_Wdecay(model):
 
 
 def lr_multi_func(epoch):
+    epoch += 1
     if epoch <= 10:
         return epoch / 10
     if epoch <= 40:
@@ -112,12 +114,12 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
-    text = 'Finish testing epoch {:>3}, time spent: {:>3}mins{:>3}s, performance:\n##'.format(
+    text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
         epoch, time_spent[0], time_spent[1])
-    text += '  CMC1:{:>5.4f},  mAP:{:>5.4f}'.format(cmc[0], mAP)
+    text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
     for k, vlist in history.items():
         v = float(mean(vlist))
-        text += '  {}:{:>5.4f}'.format(k, v)
+        text += '|{}:{:>5.4f} '.format(k, v)
         logger.add_scalar('TEST/'+k, v, epoch)
     logger.info('testing', text)
 
@@ -140,23 +142,28 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
     logger.info('training', 'Start training epoch-{}, lr={:.6}'.format(epoch,
                                                                        get_lr_from_optim(optimizer)))
 
+    scaler = amp.GradScaler()
     model.train()
     history = collections.defaultdict(list)
     for i, (imgs, labels, cids) in enumerate(train_loader):
-        scheduler.step()    
-        batch = i + 1
-        imgs, labels = imgs.cuda(), labels.cuda()
-        batch_start_time = time.time()
-        f_bn, p = model(imgs)
-        ce_loss = losses['cross_entropy_loss'](p, labels)
-        center_loss = losses['center_loss'](f_bn, labels)
-        triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
-        loss = Config.weight_ce * ce_loss
-        loss += Config.weight_center * center_loss
-        loss += Config.weight_tri * triplet_hard_loss
-        loss.backward()
 
-        optimizer.step()
+        batch = i + 1
+        batch_start_time = time.time()
+
+        imgs, labels = imgs.cuda(), labels.cuda()
+
+        with amp.autocast():
+            f_bn, p = model(imgs)
+            ce_loss = losses['cross_entropy_loss'](p, labels)
+            triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
+            loss = Config.weight_ce * ce_loss
+            loss += Config.weight_tri * triplet_hard_loss
+        
+        scaler.scale(loss).backward()
+
+        scaler.step(optimizer)
+        scaler.update()
+
         optimizer.zero_grad()
 
         acc = accuracy(p, labels)[0]
@@ -165,7 +172,6 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
 
         dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
         perform = {'ce_loss': float(Config.weight_ce * ce_loss),
-                   'center_loss': float(Config.weight_center * center_loss),
                    'triplet_hard_loss': float(Config.weight_tri * triplet_hard_loss),
                    'dist_ap_hard': float(dist_ap),
                    'dist_an_hard': float(dist_an),
@@ -176,7 +182,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
             stage = (epoch, batch)
             text = ''
             for k, v in perform.items():
-                text += ' {}:{:<8.4f}'.format(k, float(v))
+                text += '|{}:{:<8.4f} '.format(k, float(v))
             logger.info('training', text, stage=stage)
 
         for k, v in perform.items():
@@ -185,6 +191,8 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
                 logger.add_scalar('TRAIN_b/'+k, v, batch_step)
         batch_step += 1
 
+    scheduler.step()
+
     epoch_end_time = time.time()
     time_spent = sec2min_sec(epoch_start_time, epoch_end_time)
 
@@ -192,7 +200,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
         epoch, time_spent[0], time_spent[1])
     for k, vlist in history.items():
         v = mean(vlist)
-        text += '  {}:{:>5.4f}'.format(k, v)
+        text += '|{}:{:>5.4f} '.format(k, v)
         if k != 'time(s)':
             logger.add_scalar('TRAIN_e/'+k, v, epoch)
     logger.info('training', text)
@@ -248,9 +256,9 @@ def prepare(args):
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
     train_loader = torch.utils.data.DataLoader(
-        trainset, batch_size=Config.batch_size, sampler=pksampler, pin_memory=True)
+        trainset, batch_size=Config.batch_size, sampler=pksampler, num_workers=Config.nr_worker ,pin_memory=True)
     test_loader = torch.utils.data.DataLoader(
-        testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), pin_memory=True)
+        testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 
     weight_decay_setting = parm_list_with_Wdecay(model)
     optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
@@ -259,7 +267,6 @@ def prepare(args):
 
     losses = {}
     losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    losses['center_loss'] = CenterLoss(Config.nr_class)
     losses['triplet_hard_loss'] = triplet_hard_loss(
         margin=Config.triplet_margin)
 
@@ -290,6 +297,7 @@ def prepare(args):
     time_spent = sec2min_sec(prepare_start_time, prepare_end_time)
     logger.info('global', 'Finish preparing, time spend: {}mins {}s.'.format(
         time_spent[0], time_spent[1]))
+
     return ret
 
 
