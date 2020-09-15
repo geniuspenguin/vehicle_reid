@@ -32,7 +32,9 @@ def get_L2distance_matrix_numpy(a: np.ndarray, b: np.ndarray, sqrt=True):
 
 
 def get_cmc_map(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
-    """Evaluation with market1501 metric
+    """
+        offical implement by Liu,
+        Evaluation with market1501 metric
         Key: for each query identity, its gallery images from the same camera view are discarded.
         """
     num_q, num_g = distmat.shape

@@ -5,6 +5,7 @@ import os
 import cv2
 from PIL import Image
 import pickle
+from tqdm import tqdm
 
 rootdir = '/home/peng/Documents/data/VeRi'
 train_path = '/home/peng/Documents/data/VeRi/image_train'
@@ -60,21 +61,30 @@ class Veri776_train(data.Dataset):
 
         self.type2itid = None
         self.color2iclid = None
+        # self.imgs_ram = self._load_imgs_from_metas()
 
         print('veri776: {} imgs with {} ids'.format(self.nr_sample, self.nr_id))
+
+    def _load_imgs_from_metas(self):
+        imgs = []
+        for meta in tqdm(self.metas, desc='loading imgs into RAM'):
+            img = Image.open(meta['path']).convert('RGB')
+            imgs.append(img)
+        return imgs
 
     def __getitem__(self, idx):
         path = self.metas[idx]['path']
         label = self.metas[idx]['ivid']
-        cid = self.metas[idx]['icid']
+        cid = self.metas[idx]['cameraID']
         # img = cv2.imread(path)
+        # img = self.imgs_ram[idx]
         img = Image.open(path).convert('RGB')
         if self.transforms:
             img = self.transforms(img)
         if self.need_attr:
-            colorid = color_map[self.metas[idx]['colorID']]
-            typeid = type_map[self.metas[idx]['typeID']]
-            return img, label, cid, colorid, typeid
+            typeid = int(self.metas[idx]['typeID'])
+            colorid = int(self.metas[idx]['colorID'])
+            return img, label, cid, typeid, colorid
         else:
             return img, label
 
@@ -91,7 +101,15 @@ class Veri776_test(data.Dataset):
         self.g_info = infos['gallery']
         self.metas = self.relabel(self.q_info, self.g_info)
         self.transforms = transforms
+        # self.imgs_ram = self._load_imgs_from_metas()
 
+    def _load_imgs_from_metas(self):
+        imgs = []
+        for meta in tqdm(self.metas, desc='loading imgs into RAM'):
+            img = Image.open(meta['path']).convert('RGB')
+            imgs.append(img)
+        return imgs
+        
     def relabel(self, q_infos, g_infos):
         vid2ivid = {}
         cid2icid = {}
@@ -132,13 +150,14 @@ class Veri776_test(data.Dataset):
         label = self.metas[idx]['ivid']
         cid = self.metas[idx]['icid']
 
+        # img = self.imgs_ram[idx]
         img = Image.open(path).convert('RGB')
         if self.transforms:
             img = self.transforms(img)
         if self.need_attr:
-            colorid = color_map[self.metas[idx]['colorID']]
-            typeid = type_map[self.metas[idx]['typeID']]
-            return img, label, cid, colorid, typeid
+            typeid = int(self.metas[idx]['typeID'])
+            colorid = int(self.metas[idx]['colorID'])
+            return img, label, cid, typeid, colorid
         else:
             return img, label, cid
 
