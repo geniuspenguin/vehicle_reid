@@ -278,7 +278,7 @@ def resnet50_ibn_a(pretrained=False, **kwargs):
         model.load_state_dict(
             torch.load(
                 model_path['resnet50_ibn_a']),
-                strict=False)
+            strict=False)
     return model
 
 

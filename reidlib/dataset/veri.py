@@ -12,11 +12,12 @@ train_xml_path = os.path.join(rootdir, 'train_label.xml')
 test_xml_path = os.path.join(rootdir, 'test_label.xml')
 save_path = os.path.join(rootdir, 'data_info.pkl')
 
-query_name = open(os.path.join(rootdir,'name_query.txt'),'r').readlines()
+query_name = open(os.path.join(rootdir, 'name_query.txt'), 'r').readlines()
 query_set = [item.strip() for item in query_name]
 
-train_name = open(os.path.join(rootdir,'name_train.txt'),'r').readlines()
+train_name = open(os.path.join(rootdir, 'name_train.txt'), 'r').readlines()
 train_set = [item.strip() for item in train_name]
+
 
 def get_dict(path):
     xmlp = ET.XMLParser(encoding="utf-8")
@@ -37,6 +38,8 @@ def get_dict(path):
             vid2attr[vid] = attr
             name2attr[file_name] = attr
     return name2attr, vid2attr
+
+
 def update_data_info(dirname, name2attr, vid2attr):
     miss = 0
     for fpath in glob.glob(os.path.join(dirname, '*.jpg')):
@@ -50,9 +53,9 @@ def update_data_info(dirname, name2attr, vid2attr):
                 continue
             name2attr[fname] = vid2attr[vid]
         name2attr[fname]['path'] = fpath
-    print(dirname, 'miss %d'%miss)
+    print(dirname, 'miss %d' % miss)
 
-        
+
 def generate_data_info():
 
     tname2attr_tmp, tvid2attr = get_dict(train_xml_path)
@@ -72,13 +75,12 @@ def generate_data_info():
             qname2attr[name] = attr
         else:
             gname2attr[name] = attr
-    save_pkl = {'train': tname2attr, 'query': qname2attr, 'gallery': gname2attr}
+    save_pkl = {'train': tname2attr,
+                'query': qname2attr, 'gallery': gname2attr}
     for k, x in save_pkl.items():
         print(k, len(x))
     with open(os.path.join(rootdir, 'data_info.pkl'), 'wb') as f:
         pickle.dump(save_pkl, f)
-    
-
 
 
 if __name__ == '__main__':
@@ -92,7 +94,3 @@ if __name__ == '__main__':
         for k, v in dic.items():
             print(k, v)
             break
-
-    
-        
-    

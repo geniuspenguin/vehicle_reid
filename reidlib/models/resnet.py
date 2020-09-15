@@ -1,14 +1,15 @@
-import torch 
-from torch import nn 
-import math 
-from torchvision import models 
+import torch
+from torch import nn
+import math
+from torchvision import models
 import torch.nn.functional as F
-import torch.utils.model_zoo as model_zoo 
-from .weight_init import * 
+import torch.utils.model_zoo as model_zoo
+from .weight_init import *
 
 model_urls = {
     'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
 }
+
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -47,6 +48,7 @@ class Bottleneck(nn.Module):
         out = self.relu(out)
 
         return out
+
 
 class ResNet50(nn.Module):
     def __init__(self, last_stride=2, block=Bottleneck, layers=[3, 4, 6, 3]):

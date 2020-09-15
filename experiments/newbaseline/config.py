@@ -40,9 +40,11 @@ class Config:
 
     nr_worker = 2
 
-def config_info(): 
-    attrs = ['%s:%s' % (k, v) for k, v in Config.__dict__.items() if '__' not in k]
+
+def config_info():
+    attrs = ['%s:%s' % (k, v)
+             for k, v in Config.__dict__.items() if '__' not in k]
     return '\n'.join(attrs)
 
-print(config_info())
 
+print(config_info())

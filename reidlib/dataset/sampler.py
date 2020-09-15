@@ -66,6 +66,7 @@ class PKSampler_coverage(Sampler):
         samples = ((num_labels - 1) // self.p + 1) * self.p * self.k
         return samples
 
+
 class RandomIdentitySampler(Sampler):
     """
     code from: 'https://github.com/BravoLu/open-VehicleReID'
@@ -76,13 +77,14 @@ class RandomIdentitySampler(Sampler):
     - num_instances (int): number of instances per identity in a batch.
     - batch_size (int): number of examples in a batch.
     """
+
     def __init__(self, dataset, batch_size, num_instances):
         self.data_source = dataset.train
         self.batch_size = batch_size
         self.num_instances = num_instances
         self.num_pids_per_batch = self.batch_size // self.num_instances
         self.index_dic = defaultdict(list)
-        #changed according to the dataset
+        # changed according to the dataset
         for index, inputs in enumerate(self.data_source):
             self.index_dic[inputs[1]].append(index)
 
@@ -103,7 +105,8 @@ class RandomIdentitySampler(Sampler):
         for pid in self.pids:
             idxs = copy.deepcopy(self.index_dic[pid])
             if len(idxs) < self.num_instances:
-                idxs = np.random.choice(idxs, size=self.num_instances, replace=True)
+                idxs = np.random.choice(
+                    idxs, size=self.num_instances, replace=True)
             random.shuffle(idxs)
             batch_idxs = []
             for idx in idxs:
@@ -128,4 +131,3 @@ class RandomIdentitySampler(Sampler):
 
     def __len__(self):
         return self.length
-

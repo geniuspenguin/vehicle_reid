@@ -145,7 +145,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
     scaler = amp.GradScaler()
     model.train()
     history = collections.defaultdict(list)
-    for i, (imgs, labels, cids) in enumerate(train_loader):
+    for i, (imgs, labels) in enumerate(train_loader):
 
         batch = i + 1
         batch_start_time = time.time()
@@ -158,7 +158,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
             triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
             loss = Config.weight_ce * ce_loss
             loss += Config.weight_tri * triplet_hard_loss
-        
+
         scaler.scale(loss).backward()
 
         scaler.step(optimizer)
@@ -256,7 +256,7 @@ def prepare(args):
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
     train_loader = torch.utils.data.DataLoader(
-        trainset, batch_size=Config.batch_size, sampler=pksampler, num_workers=Config.nr_worker ,pin_memory=True)
+        trainset, batch_size=Config.batch_size, sampler=pksampler, num_workers=Config.nr_worker, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 

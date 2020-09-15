@@ -44,7 +44,7 @@ class triplet_hard_loss(nn.Module):
         loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss(
             x, x, labels, labels, margin=self.margin, sqrt=self.sqrt)
         return loss
-    
+
     def get_mean_hard_dist(self):
         return self.dist_ap_hard, self.dist_an_hard
 
@@ -96,6 +96,7 @@ class CenterLoss(nn.Module):
         loss = dist.mean()
         return loss
 
+
 if __name__ == '__main__':
     la = torch.tensor([1, 1, 2, 2, 3, 3, 4, 4])
     a = torch.tensor([
@@ -103,9 +104,9 @@ if __name__ == '__main__':
         [0, 3, 0],
         [0, 0, 0],
         [1, 1, 0],
-        [1, 10,0],
+        [1, 10, 0],
         [0, 0, 0]
     ], dtype=torch.float32)
-    la = torch.tensor([1,1,1,2,2,2])
+    la = torch.tensor([1, 1, 1, 2, 2, 2])
     lossfunc_my = triplet_hard_loss()
     loss = lossfunc_my(a, la)

@@ -35,7 +35,8 @@ class Config:
     nr_query = 1678
     nr_gallery = 11579
 
-def config_info(): 
-    attrs = ['%s:%s' % (k, v) for k, v in Config.__dict__.items() if '__' not in k]
-    return '\n'.join(attrs)
 
+def config_info():
+    attrs = ['%s:%s' % (k, v)
+             for k, v in Config.__dict__.items() if '__' not in k]
+    return '\n'.join(attrs)

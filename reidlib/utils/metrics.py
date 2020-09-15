@@ -86,6 +86,7 @@ def get_cmc_map(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
 
     return all_cmc, mAP
 
+
 def accuracy(output, target, topk=(1,)):
     maxk = max(topk)
     batch_size = target.size(0)
@@ -98,5 +99,6 @@ def accuracy(output, target, topk=(1,)):
     for k in topk:
         correct_k = correct[:k].view(-1).float().sum(0)
         res.append(correct_k.mul_(100.0 / batch_size))
-    percent = lambda x: x/100 
+
+    def percent(x): return x/100
     return list(map(percent, res))

@@ -5,6 +5,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchsummary import summary
 from termcolor import colored
 
+
 def sec2min_sec(start, end):
     secs = end - start
     secs = int(secs)
@@ -14,7 +15,7 @@ def sec2min_sec(start, end):
 
 
 class Logger(SummaryWriter):
-    def __init__(self,time_color='green', tag_color='magenta', stage_color='blue', **kargs):
+    def __init__(self, time_color='green', tag_color='magenta', stage_color='blue', **kargs):
         super().__init__(**kargs)
         self.time_color = time_color
         self.tag_color = tag_color
@@ -37,7 +38,6 @@ class Logger(SummaryWriter):
         stage_print = '[{}]'.format(stage_str) if stage_str else ''
         stage_print = colored(stage_print, self.stage_color)
 
-
         print('{}{}{}{}'.format(clock_print, tag_print, stage_print, text))
         text = stage_str + text
         super().add_text(tag, '[{}]{}'.format(clock, text))
@@ -47,6 +47,7 @@ class Logger(SummaryWriter):
         if time_report:
             clock = time.strftime("%H:%M:%S", time.localtime())
         super().add_text(tag, '[{}]{}'.format(clock, text))
+
 
 def model_summary(model, input_shape=(3, 224, 224)):
     if not next(model.parameters()).is_cuda:

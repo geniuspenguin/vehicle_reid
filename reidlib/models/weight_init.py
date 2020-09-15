@@ -1,5 +1,6 @@
-import numpy as np 
+import numpy as np
 import torch.nn as nn
+
 
 def weights_init_kaiming(m):
     classname = m.__class__.__name__
@@ -22,4 +23,3 @@ def weights_init_classifier(m):
         nn.init.normal_(m.weight, std=0.001)
         if m.bias:
             nn.init.constant_(m.bias, 0.0)
-
