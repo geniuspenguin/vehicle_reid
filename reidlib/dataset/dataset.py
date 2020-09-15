@@ -6,10 +6,25 @@ import cv2
 from PIL import Image
 import pickle
 
+rootdir = '/home/peng/Documents/data/VeRi'
 train_path = '/home/peng/Documents/data/VeRi/image_train'
 query_path = '/home/peng/Documents/data/VeRi/image_query'
 gallery_path = '/home/peng/Documents/data/VeRi/image_test'
 pickle_path = '/home/peng/Documents/data/VeRi/data_info.pkl'
+type_lines = open(os.path.join(rootdir, 'list_type.txt'), 'r').readlines()
+color_lines = open(os.path.join(rootdir, 'list_color.txt'), 'r').readlines()
+
+def generate_attr_map(lines):
+    name2id = {}
+    for line in lines:
+        args = line.split()
+        idx = int(args[0])
+        name = args[1]
+        name2id[name] = idx
+    return name2id
+
+type_map = generate_attr_map(type_lines)
+color_map = generate_attr_map(color_lines)
 
 
 def generate_id_map(data_info):
@@ -32,37 +47,49 @@ def generate_id_map(data_info):
 
 
 class Veri776_train(data.Dataset):
-    def __init__(self, pickle_path=pickle_path, transforms=None):
+    def __init__(self, pickle_path=pickle_path, transforms=None, need_attr=False):
         super().__init__()
         self.pickle_path = pickle_path
         self.sample_info = pickle.load(open(pickle_path, 'rb'))['train']
         self.metas, self.label_to_samples = generate_id_map(self.sample_info)
+        self.need_attr = need_attr
 
         self.transforms = transforms
         self.nr_id = len(self.label_to_samples)
         self.nr_sample = len(self.metas)
+
+        self.type2itid = None
+        self.color2iclid = None
+
         print('veri776: {} imgs with {} ids'.format(self.nr_sample, self.nr_id))
 
     def __getitem__(self, idx):
         path = self.metas[idx]['path']
         label = self.metas[idx]['ivid']
+        cid = self.metas[idx]['icid']
         # img = cv2.imread(path)
         img = Image.open(path).convert('RGB')
         if self.transforms:
             img = self.transforms(img)
-        return img, label
+        if self.need_attr:
+            colorid = color_map[self.metas[idx]['colorID']]
+            typeid = type_map[self.metas[idx]['typeID']]
+            return img, label, cid, colorid, typeid
+        else:
+            return img, label
 
     def __len__(self):
         return self.nr_sample
 
 
 class Veri776_test(data.Dataset):
-    def __init__(self, pickle_path=pickle_path, transforms=None):
+    def __init__(self, pickle_path=pickle_path, transforms=None, need_attr=False):
         self.pickle_path = pickle_path
         infos = pickle.load(open(pickle_path, 'rb'))
+        self.need_attr = need_attr
         self.q_info = infos['query']
         self.g_info = infos['gallery']
-        self.test = self.relabel(self.q_info, self.g_info)
+        self.metas = self.relabel(self.q_info, self.g_info)
         self.transforms = transforms
 
     def relabel(self, q_infos, g_infos):
@@ -101,17 +128,22 @@ class Veri776_test(data.Dataset):
         return infos
 
     def __getitem__(self, idx):
-        path = self.test[idx]['path']
-        label = self.test[idx]['ivid']
-        cid = self.test[idx]['icid']
+        path = self.metas[idx]['path']
+        label = self.metas[idx]['ivid']
+        cid = self.metas[idx]['icid']
 
         img = Image.open(path).convert('RGB')
         if self.transforms:
             img = self.transforms(img)
-        return img, label, cid
+        if self.need_attr:
+            colorid = color_map[self.metas[idx]['colorID']]
+            typeid = type_map[self.metas[idx]['typeID']]
+            return img, label, cid, colorid, typeid
+        else:
+            return img, label, cid
 
     def __len__(self):
-        return len(self.test)
+        return len(self.metas)
 
     def get_num_query(self):
         return len(self.q_info)
