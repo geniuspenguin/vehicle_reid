@@ -6,7 +6,7 @@ from reidlib.models.resnet_ibn import resnet50_ibn_a
 from reidlib.utils.loss import triplet_hard_loss, CenterLoss
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
-from model import r50ibn_reid_cls
+from model import Baseline
 import time
 import numpy as np
 import torchvision.transforms as transforms
@@ -68,7 +68,6 @@ def parm_list_with_Wdecay(model):
 
 
 def lr_multi_func(epoch):
-    epoch = epoch + 1
     if epoch <= 10:
         return epoch / 10
     if epoch <= 40:
@@ -93,14 +92,12 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
 
     for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        batch_start_time = time.time()
-        f, f_bn, p = model(imgs)
-        triplet_hard_loss = losses['triplet_hard_loss'](f, labels)
+        f_norm = model(imgs)
+        triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
         history['triplet_hard_loss'].append(float(triplet_hard_loss))
-        all_features.append(f_bn.cpu().detach().numpy())
+        all_features.append(f_norm.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
-        batch_end_time = time.time()
 
     all_features = np.concatenate(all_features, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
@@ -146,13 +143,14 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
     model.train()
     history = collections.defaultdict(list)
     for i, (imgs, labels, cids) in enumerate(train_loader):
+        scheduler.step()    
         batch = i + 1
         imgs, labels = imgs.cuda(), labels.cuda()
         batch_start_time = time.time()
-        f, f_bn, p = model(imgs)
+        f_bn, p = model(imgs)
         ce_loss = losses['cross_entropy_loss'](p, labels)
         center_loss = losses['center_loss'](f_bn, labels)
-        triplet_hard_loss = losses['triplet_hard_loss'](f, labels)
+        triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
         loss = Config.weight_ce * ce_loss
         loss += Config.weight_center * center_loss
         loss += Config.weight_tri * triplet_hard_loss
@@ -187,7 +185,6 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
                 logger.add_scalar('TRAIN_b/'+k, v, batch_step)
         batch_step += 1
 
-    scheduler.step()
     epoch_end_time = time.time()
     time_spent = sec2min_sec(epoch_start_time, epoch_end_time)
 
@@ -220,15 +217,12 @@ def prepare(args):
     check_config_dir()
     logger.info('setting', config_info(), time_report=False)
 
-    model = r50ibn_reid_cls(nr_class=Config.nr_class,
-                            nr_feature=Config.nr_feature)
+    model = Baseline(num_classes=Config.nr_class)
     logger.info('setting', model_summary(model), time_report=False)
     logger.info('setting', str(model), time_report=False)
 
-    resize_target = (
-        int(Config.input_shape[0]*1.5), int(Config.input_shape[1]*1.5))
     train_transforms = transforms.Compose([
-        transforms.Resize(resize_target),
+        transforms.Resize(Config.input_shape),
         transforms.RandomApply([
             transforms.ColorJitter(
                 brightness=0.3, contrast=0.3, saturation=0.3, hue=0)

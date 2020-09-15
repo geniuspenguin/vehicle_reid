@@ -40,13 +40,13 @@ class Logger(SummaryWriter):
         text = stage_str + text
 
         print('{}{}{}{}'.format(clock_print, tag_print, stage_print, text))
-        super().add_text(tag, '{}{}'.format(clock, text))
+        super().add_text(tag, '[{}]{}'.format(clock, text))
 
     def add_text(self, tag, text, time_report=True):
         clock = ''
         if time_report:
-            clock = time.strftime("[%H:%M:%S] ", time.localtime())
-        super().add_text(tag, '{}{}'.format(clock, text))
+            clock = time.strftime("%H:%M:%S", time.localtime())
+        super().add_text(tag, '[{}]{}'.format(clock, text))
 
 def model_summary(model, input_shape=(3, 224, 224)):
     if not next(model.parameters()).is_cuda:

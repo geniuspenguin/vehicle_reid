@@ -34,7 +34,7 @@ def generate_idmap(folder):
 
 
 class Veri776_train(data.Dataset):
-    def __init__(self, path=train_path, transforms=None):
+    def __init__(self, path=train_path, transforms=None, attr_mode=False):
         super().__init__()
         self.path = path
         self.sample_to_path, self.label_to_samples, self.sample_to_label, self.sample_to_cid, self.camera_to_cid \
@@ -44,6 +44,10 @@ class Veri776_train(data.Dataset):
         self.nr_id = len(self.label_to_samples)
         self.nr_sample = len(self.sample_to_label)
         print('veri776: {} imgs with {} ids'.format(self.nr_sample, self.nr_id))
+
+        self.attr_mode = attr_mode
+        if self.attr_label:
+            
 
     def __getitem__(self, idx):
         path = self.sample_to_path[idx]
