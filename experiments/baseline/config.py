@@ -38,13 +38,10 @@ class Config:
     w_type = 1
     w_color = 1
 
-    nr_worker = 0
+    nr_worker = 1
 
 
 def config_info():
     attrs = ['%s:%s' % (k, v)
              for k, v in Config.__dict__.items() if '__' not in k]
     return '\n'.join(attrs)
-
-
-print(config_info())

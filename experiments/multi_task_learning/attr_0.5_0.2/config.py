@@ -46,5 +46,3 @@ def config_info():
              for k, v in Config.__dict__.items() if '__' not in k]
     return '\n'.join(attrs)
 
-
-print(config_info())

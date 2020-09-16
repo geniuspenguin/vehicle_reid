@@ -3,8 +3,8 @@ from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
 from reidlib.models.resnet_ibn import resnet50_ibn_a
-from reidlib.utils.loss import triplet_hard_loss
-from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
+from reidlib.utils.loss import triplet_hard_loss, tri_hard_attn
+from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy, get_L2distance_matrix_attn_batch
 import torch
 from model import Baseline
 import time
@@ -73,45 +73,59 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     val_start_time = time.time()
     model.eval()
     logger.info('testing', 'Start testing')
-    all_features, all_labels, all_cids = [], [], []
+    all_features_gpu, all_labels, all_cids, all_mask_gpu = [], [], [], []
+    all_attn_dist = []
     history = collections.defaultdict(list)
+    
 
     for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        f_norm = model(imgs)
-        triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
+        f_norm, f_mask = model(imgs)
+        triplet_hard_loss, dist = losses['triplet_hard_loss'](f_norm, f_mask, labels)
         history['triplet_hard_loss'].append(float(triplet_hard_loss))
-        all_features.append(f_norm.cpu().detach().numpy())
+        all_features_gpu.append(f_norm)
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
+        all_mask_gpu.append(f_mask)
+        all_attn_dist.append(dist.cpu().detach().numpy())
 
-    all_features = np.concatenate(all_features, axis=0)
+    all_features_gpu = torch.cat(all_features_gpu, axis=0)
+    all_features = all_features_gpu.cpu().detach().numpy()
     all_labels = np.concatenate(all_labels, axis=0)
     all_cids = np.concatenate(all_cids, axis=0)
+    all_mask_gpu = torch.cat(all_mask_gpu, axis=0)
+
+
+    q_f_gpu, g_f_gpu = all_features_gpu[:nr_query], all_features_gpu[nr_query:]
     q_f, g_f = all_features[:nr_query], all_features[nr_query:]
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
+    q_mask, g_mask = all_mask_gpu[:nr_query], all_mask_gpu[nr_query:]
 
     logger.info('testing', 'Compute CMC and mAP')
+    attn_distance_matrix = get_L2distance_matrix_attn_batch(q_f_gpu, g_f_gpu, q_mask, g_mask, temp=Config.temperature)
+    attn_distance_matrix = attn_distance_matrix.cpu().detach().numpy()
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
+    cmc_a, mAP_a = get_cmc_map(attn_distance_matrix, q_ids, g_ids, q_cids, g_cids)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
     text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
         epoch, time_spent[0], time_spent[1])
-    text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
+    text += 'With ATTENTION> |CMC1:{:>5.4f} |mAP:{:>5.4f}  '.format(cmc_a[0], mAP_a)
+    text += 'W/O attention> |CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
     for k, vlist in history.items():
         v = float(mean(vlist))
         text += '|{}:{:>5.4f} '.format(k, v)
         logger.add_scalar('TEST/'+k, v, epoch)
     logger.info('testing', text)
 
-    logger.add_scalar('TEST/cmc1', cmc[0], epoch)
-    logger.add_scalar('TEST/cmc5', cmc[4], epoch)
-    logger.add_scalar('TEST/cmc10', cmc[9], epoch)
-    logger.add_scalar('TEST/mAP', mAP, epoch)
-    return cmc, mAP
+    logger.add_scalar('TEST/cmc1', cmc_a[0], epoch)
+    logger.add_scalar('TEST/cmc5', cmc_a[4], epoch)
+    logger.add_scalar('TEST/cmc10', cmc_a[9], epoch)
+    logger.add_scalar('TEST/mAP', mAP_a, epoch)
+    return cmc_a, mAP_a
 
 
 def get_lr_from_optim(optim):
@@ -130,16 +144,16 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
     model.train()
     history = collections.defaultdict(list)
     for i, (imgs, labels) in enumerate(train_loader):
-
         batch = i + 1
         batch_start_time = time.time()
 
         imgs, labels = imgs.cuda(), labels.cuda()
 
         with amp.autocast():
-            f_bn, p = model(imgs)
+            f_bn, p, f_mask = model(imgs)
             ce_loss = losses['cross_entropy_loss'](p, labels)
-            triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
+            triplet_hard_loss, _ = losses['triplet_hard_loss'](
+                f_bn, f_mask, labels)
             loss = Config.weight_ce * ce_loss
             loss += Config.weight_tri * triplet_hard_loss
 
@@ -156,7 +170,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
 
         dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
         perform = {'ce_loss': float(Config.weight_ce * ce_loss),
-                   'triplet_hard_loss': float(Config.weight_tri * triplet_hard_loss),
+                   'triplet_hard_loss_a': float(Config.weight_tri * triplet_hard_loss),
                    'dist_ap_hard': float(dist_ap),
                    'dist_an_hard': float(dist_an),
                    'accuracy': float(acc),
@@ -251,8 +265,8 @@ def prepare(args):
 
     losses = {}
     losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    losses['triplet_hard_loss'] = triplet_hard_loss(
-        margin=Config.triplet_margin)
+    losses['triplet_hard_loss'] = tri_hard_attn(temp=Config.temperature,
+                                                margin=Config.triplet_margin)
 
     for k in losses.keys():
         losses[k] = losses[k].cuda()

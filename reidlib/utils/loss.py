@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from reidlib.utils.metrics import get_L2distance_matrix
+from reidlib.utils.metrics import get_L2distance_matrix, get_L2distance_matrix_attn
 
 
 def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True, valid_ap=None):
@@ -13,6 +13,26 @@ def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True, valid_ap=None)
     negative_mask = 1 - positive_mask
     if not valid_ap and qry.shape[0] == gry.shape[0]:
         valid_ap = 1 - torch.diag(torch.ones(qry.shape[0]))
+        if positive_mask.is_cuda:
+            valid_ap = valid_ap.cuda()
+        positive_mask = valid_ap * positive_mask
+    dist_ap = distance * positive_mask
+    dist_ap_hard = dist_ap.max(axis=1, keepdims=False)[0]
+
+    dist_an = distance * negative_mask
+    max_dist_an = dist_an.max()
+    dist_an = distance * negative_mask + max_dist_an * (1 - negative_mask)
+    dist_an_hard = dist_an.min(axis=1, keepdims=False)[0]
+
+    tri = (dist_ap_hard - dist_an_hard + margin).clamp(min=0)
+    tri_loss = tri.mean()
+    return tri_loss, dist_ap_hard.mean(), dist_an_hard.mean()
+
+def _triplet_hard_loss_new(distance, q_ids, g_ids, margin, valid_ap=None):
+    positive_mask = (q_ids.reshape(-1, 1) == g_ids.reshape(1, -1)).float()
+    negative_mask = 1 - positive_mask
+    if not valid_ap and q_ids.shape[0] == g_ids.shape[0]:
+        valid_ap = 1 - torch.diag(torch.ones(q_ids.shape[0]))
         if positive_mask.is_cuda:
             valid_ap = valid_ap.cuda()
         positive_mask = valid_ap * positive_mask
@@ -50,21 +70,40 @@ class triplet_hard_loss(nn.Module):
     def get_mean_hard_dist(self):
         return self.dist_ap_hard, self.dist_an_hard
 
-class triplet_hard_loss_attentioned(nn.Module):
+class triplet_hard_loss_base(nn.Module):
     def __init__(self, margin=1.2, sqrt=True):
         super().__init__()
         self.margin = margin
         self.sqrt = sqrt
         self.dist_ap_hard = None
         self.dist_an_hard = None
+    
+    def get_dist(self, x):
+        return get_L2distance_matrix(x, x, sqrt=self.sqrt)
 
     def forward(self, x, labels):
-        loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss(
-            x, x, labels, labels, margin=self.margin, sqrt=self.sqrt)
+        dist = self.get_dist(x)
+        loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss_new(
+            dist, labels, labels, margin=self.margin)
         return loss
     
     def get_mean_hard_dist(self):
         return self.dist_ap_hard, self.dist_an_hard
+
+class tri_hard_attn(triplet_hard_loss_base):
+    def __init__(self, temp=0.1, margin=1.2, sqrt=True):
+        super().__init__(margin, sqrt)
+        self.temp = temp
+
+    def get_dist(self, x, x_mask):
+        return get_L2distance_matrix_attn(x, x, x_mask, x_mask, temp=self.temp, sqrt=self.sqrt)
+
+    def forward(self, x, x_mask, labels):
+        dist = self.get_dist(x, x_mask)
+        loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss_new(
+            dist, labels, labels, margin=self.margin)
+        return loss, dist
+
 
 class CenterLoss(nn.Module):
     """Center loss.

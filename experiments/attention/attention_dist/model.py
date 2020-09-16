@@ -32,7 +32,7 @@ class Baseline(nn.Module):
         self.bn_attn.bias.requires_grad_(False)
         self.sigmoid = nn.Sigmoid()
 
-        self.fc_attn.appy(weights_init_kaiming)
+        self.fc_attn.apply(weights_init_kaiming)
         self.bn_attn.apply(weights_init_kaiming)
 
     def forward(self, x):
@@ -42,7 +42,7 @@ class Baseline(nn.Module):
             global_feats.shape[0], -1)  # flatten to (bs, 2048)
         feats = self.bn(global_feats)  # normalize for angular softmax
 
-        mask = self.fc_attn(x)
+        mask = self.fc_attn(feats)
         mask = self.bn_attn(mask)
         mask = self.sigmoid(mask)
 
