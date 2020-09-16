@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import torch.nn as nn
+from tqdm import tqdm
 
 
 def get_L2distance_matrix(a: torch.tensor, b: torch.tensor, sqrt=True, epsilon=1e-20):
@@ -17,6 +19,58 @@ def get_L2distance_matrix(a: torch.tensor, b: torch.tensor, sqrt=True, epsilon=1
         return l2
     return square_l2
 
+def get_L2distance_matrix_attn(a: torch.tensor, b: torch.tensor, a_mask: torch.tensor, b_mask: torch.tensor, temp, sqrt=True, epsilon=1e-20):
+    F = a.shape[1]
+    weight = a_mask.unsqueeze(1) * b_mask.unsqueeze(0)
+    weight = weight / temp
+    weight = nn.Softmax(dim=2)(weight) * F
+    a = a.unsqueeze(1)
+    b = b.unsqueeze(0)
+    diff = (a - b) ** 2
+    diff = diff * weight
+    square_l2 = diff.sum(axis=2)
+    if sqrt:
+        zero_mask = torch.eq(square_l2, 0).float()
+        square_l2 = square_l2 + zero_mask * epsilon
+        l2 = torch.sqrt(square_l2)
+        l2 = l2 * (1 - zero_mask)
+        return l2
+    return square_l2
+
+def get_L2distance_matrix_attn_batch(a: torch.tensor, b: torch.tensor, a_mask: torch.tensor, b_mask: torch.tensor, temp, batch=1, sqrt=True):
+    all_dist = []
+    for start in tqdm(range(0, a.shape[0], batch), desc='computing attention distance'):
+        end = start + batch
+        dist = get_L2distance_matrix_attn(a[start: end, ...], b, a_mask[start: end, ...], b_mask, temp, sqrt)
+        all_dist.append(dist)
+    all_dist = torch.cat(all_dist, axis=0)
+    return all_dist
+
+def _get_L2distance_matrix_attn_numpy(a, b, a_mask, b_mask, temp, sqrt=True):
+    F = a.shape[1]
+    w = a_mask[:, None, :] * b_mask[None, :, :]
+    w = w / temp
+
+    exp_w = np.exp(w)
+    weight = exp_w / np.sum(exp_w, axis=2, keepdims=True)
+    weight = weight * F
+
+    diff = (a[:, None, :] - b[None, :, :]) ** 2
+    diff = diff * weight
+    square_l2 = diff.sum(axis=2)
+    if sqrt:
+        return np.sqrt(square_l2)
+    return square_l2
+
+def get_L2distance_matrix_attn_numpy(a, b, a_mask, b_mask, temp, batch=320, sqrt=True):
+    all_dist = []
+    for start in tqdm(range(0, a.shape[0], batch), desc='computing attention distance'):
+        end = start + batch
+        dist = _get_L2distance_matrix_attn_numpy(a[start: end, ...], b, a_mask[start: end, ...], b_mask, temp, sqrt)
+        all_dist.append(dist)
+    all_dist = np.concatenate(all_dist, axis=0)
+
+
 
 def get_L2distance_matrix_numpy(a: np.ndarray, b: np.ndarray, sqrt=True):
     ab = np.matmul(a, b.T)
@@ -32,7 +86,9 @@ def get_L2distance_matrix_numpy(a: np.ndarray, b: np.ndarray, sqrt=True):
 
 
 def get_cmc_map(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
-    """Evaluation with market1501 metric
+    """
+        offical implement by Liu,
+        Evaluation with market1501 metric
         Key: for each query identity, its gallery images from the same camera view are discarded.
         """
     num_q, num_g = distmat.shape
@@ -86,6 +142,7 @@ def get_cmc_map(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=50):
 
     return all_cmc, mAP
 
+
 def accuracy(output, target, topk=(1,)):
     maxk = max(topk)
     batch_size = target.size(0)
@@ -98,5 +155,6 @@ def accuracy(output, target, topk=(1,)):
     for k in topk:
         correct_k = correct[:k].view(-1).float().sum(0)
         res.append(correct_k.mul_(100.0 / batch_size))
-    percent = lambda x: x/100 
+
+    def percent(x): return x/100
     return list(map(percent, res))
