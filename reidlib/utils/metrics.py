@@ -17,6 +17,8 @@ def get_L2distance_matrix(a: torch.tensor, b: torch.tensor, sqrt=True, epsilon=1
         return l2
     return square_l2
 
+# def get_L2distance_matrix_attn(a: torch.tensor, b: torch.tensor, a_mask: torch.tensor, b_mask: torch.tensor)
+
 
 def get_L2distance_matrix_numpy(a: np.ndarray, b: np.ndarray, sqrt=True):
     ab = np.matmul(a, b.T)

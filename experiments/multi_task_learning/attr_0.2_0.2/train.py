@@ -351,9 +351,10 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
     train_end_time = time.time()
     time_spent = sec2min_sec(train_start_time, train_end_time)
 
-    text = 'Finish training, time spent: {:>3}mins {:>3}s\n'.format(
+    text = 'Finish training, time spent: {:>3}mins {:>3}s'.format(
         time_spent[0], time_spent[1])
-    text += 'best mAP:{:>5.4f} in epoch {:>3}; best top1:{:>5.4f} in epoch{:>3}'.format(
+    logger.info('global', text)
+    text = '##FINISH## best mAP:{:>5.4f} in epoch {:>3}; best top1:{:>5.4f} in epoch{:>3}'.format(
         best_mAP, best_mAP_epoch, best_top1, best_top1_epoch)
     logger.info('global', text)
 

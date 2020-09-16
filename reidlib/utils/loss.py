@@ -28,6 +28,8 @@ def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True, valid_ap=None)
     tri_loss = tri.mean()
     return tri_loss, dist_ap_hard.mean(), dist_an_hard.mean()
 
+    
+
 
 # def triplet_hard_loss(feat, labels, margin, sqrt=True):
 #     return _triplet_hard_loss(feat, feat, labels, labels, margin=margin, sqrt=sqrt)
@@ -44,10 +46,25 @@ class triplet_hard_loss(nn.Module):
         loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss(
             x, x, labels, labels, margin=self.margin, sqrt=self.sqrt)
         return loss
-
+    
     def get_mean_hard_dist(self):
         return self.dist_ap_hard, self.dist_an_hard
 
+class triplet_hard_loss_attentioned(nn.Module):
+    def __init__(self, margin=1.2, sqrt=True):
+        super().__init__()
+        self.margin = margin
+        self.sqrt = sqrt
+        self.dist_ap_hard = None
+        self.dist_an_hard = None
+
+    def forward(self, x, labels):
+        loss, self.dist_ap_hard, self.dist_an_hard = _triplet_hard_loss(
+            x, x, labels, labels, margin=self.margin, sqrt=self.sqrt)
+        return loss
+    
+    def get_mean_hard_dist(self):
+        return self.dist_ap_hard, self.dist_an_hard
 
 class CenterLoss(nn.Module):
     """Center loss.
@@ -82,7 +99,7 @@ class CenterLoss(nn.Module):
                 dim=1, keepdim=True).expand(self.num_classes, batch_size).t()
         distmat.addmm_(x, self.centers.t(), beta=1, alpha=-2)
 
-        classes = torch.arange(self.num_classes, device=x.device)
+        classes = torch.arange(self.num_classes, device=x.device).long()
         labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)
         mask = labels.eq(classes.expand(batch_size, self.num_classes))
 
@@ -96,7 +113,6 @@ class CenterLoss(nn.Module):
         loss = dist.mean()
         return loss
 
-
 if __name__ == '__main__':
     la = torch.tensor([1, 1, 2, 2, 3, 3, 4, 4])
     a = torch.tensor([
@@ -104,9 +120,9 @@ if __name__ == '__main__':
         [0, 3, 0],
         [0, 0, 0],
         [1, 1, 0],
-        [1, 10, 0],
+        [1, 10,0],
         [0, 0, 0]
     ], dtype=torch.float32)
-    la = torch.tensor([1, 1, 1, 2, 2, 2])
+    la = torch.tensor([1,1,1,2,2,2])
     lossfunc_my = triplet_hard_loss()
     loss = lossfunc_my(a, la)

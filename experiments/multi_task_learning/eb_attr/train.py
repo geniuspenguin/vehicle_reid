@@ -3,10 +3,10 @@ from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
 from reidlib.models.resnet_ibn import resnet50_ibn_a
-from reidlib.utils.loss import triplet_hard_loss, CenterLoss
+from reidlib.utils.loss import triplet_hard_loss
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
-from model import r50ibn_reid_cls
+from model import Baseline
 import time
 import numpy as np
 import torchvision.transforms as transforms
@@ -15,27 +15,12 @@ import os
 from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
+import torch.cuda.amp as amp
 
 batch_step = 1
 logger = Logger(log_dir=Config.log_dir)
 
 
-# def cross_entropy_and_triple_thard_loss(features, pros, labels, margin=0.25, weight_tri=1, weight_ce=1, weight_center=0.0005):
-#     tri_loss = triplet_hard_loss(features, labels, margin)
-#     ce_func = torch.nn.CrossEntropyLoss()
-#     ce_loss = ce_func(pros, labels)
-#     cl_func = CenterLoss()
-#     if features.is_cuda:
-#         ce_func = ce_func.cuda()
-#         cl_func = cl_func.cuda()
-#     ce_loss, cl_loss = ce_func(features, labels), cl_func(features, labels)
-#     # print(ce_loss, tri_loss)
-#     return weight_tri * tri_loss + weight_ce * ce_loss + weight_center * cl_loss
-
-# f = torch.rand((4, 256)).cuda()
-# pros = torch.randn((4, 10)).cuda()
-# labels = target = torch.empty(4, dtype=torch.long).random_(10).cuda()
-# print(cross_entropy_and_triple_thard_loss(f, pros, labels))
 def check_config_dir():
     for dir in [Config.experiment_dir, Config.data_dir, Config.model_dir, Config.log_dir]:
         if not os.path.exists(dir):
@@ -68,7 +53,7 @@ def parm_list_with_Wdecay(model):
 
 
 def lr_multi_func(epoch):
-    epoch = epoch + 1
+    epoch += 1
     if epoch <= 10:
         return epoch / 10
     if epoch <= 40:
@@ -91,16 +76,23 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     all_features, all_labels, all_cids = [], [], []
     history = collections.defaultdict(list)
 
-    for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
+    for i, (imgs, labels, cids, types, colors) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        batch_start_time = time.time()
-        f, f_bn, p = model(imgs)
-        triplet_hard_loss = losses['triplet_hard_loss'](f, labels)
+        types, colors = types.cuda(), colors.cuda()
+        f_norm, p_type, p_color = model(imgs)
+
+        triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
+
+        acc_type = accuracy(p_type, types)[0]
+        acc_color = accuracy(p_color, colors)[0]
+
         history['triplet_hard_loss'].append(float(triplet_hard_loss))
-        all_features.append(f_bn.cpu().detach().numpy())
+        history['acc_type'].append(float(acc_type))
+        history['acc_color'].append(float(acc_color))
+
+        all_features.append(f_norm.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
-        batch_end_time = time.time()
 
     all_features = np.concatenate(all_features, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
@@ -115,12 +107,12 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
-    text = 'Finish testing epoch {:>3}, time spent: {:>3}mins{:>3}s, performance:\n##'.format(
+    text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
         epoch, time_spent[0], time_spent[1])
-    text += '  CMC1:{:>5.4f},  mAP:{:>5.4f}'.format(cmc[0], mAP)
+    text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
     for k, vlist in history.items():
         v = float(mean(vlist))
-        text += '  {}:{:>5.4f}'.format(k, v)
+        text += '|{}:{:>5.4f} '.format(k, v)
         logger.add_scalar('TEST/'+k, v, epoch)
     logger.info('testing', text)
 
@@ -143,42 +135,58 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
     logger.info('training', 'Start training epoch-{}, lr={:.6}'.format(epoch,
                                                                        get_lr_from_optim(optimizer)))
 
+    scaler = amp.GradScaler()
     model.train()
     history = collections.defaultdict(list)
-    for i, (imgs, labels, cids) in enumerate(train_loader):
-        batch = i + 1
-        imgs, labels = imgs.cuda(), labels.cuda()
-        batch_start_time = time.time()
-        f, f_bn, p = model(imgs)
-        ce_loss = losses['cross_entropy_loss'](p, labels)
-        center_loss = losses['center_loss'](f_bn, labels)
-        triplet_hard_loss = losses['triplet_hard_loss'](f, labels)
-        loss = Config.weight_ce * ce_loss
-        loss += Config.weight_center * center_loss
-        loss += Config.weight_tri * triplet_hard_loss
-        loss.backward()
+    for i, (imgs, labels, _, types, colors) in enumerate(train_loader):
 
-        optimizer.step()
+        batch = i + 1
+        batch_start_time = time.time()
+
+        imgs, labels = imgs.cuda(), labels.cuda()
+        types, colors = types.cuda(), colors.cuda()
+
+        with amp.autocast():
+            f_bn, p, p_type, p_color = model(imgs)
+            ce_loss = losses['cross_entropy_loss'](p, labels)
+            triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
+            type_ce_loss = losses['type_ce_loss'](p_type, types)
+            color_ce_loss = losses['color_ce_loss'](p_color, colors)
+            loss = Config.weight_ce * ce_loss
+            loss += Config.weight_tri * triplet_hard_loss
+            loss += Config.w_type * type_ce_loss
+            loss += Config.w_color * color_ce_loss
+
+        scaler.scale(loss).backward()
+
+        scaler.step(optimizer)
+        scaler.update()
+
         optimizer.zero_grad()
 
         acc = accuracy(p, labels)[0]
+        acc_type = accuracy(p_type, types)[0]
+        acc_color = accuracy(p_color, colors)[0]
         batch_end_time = time.time()
         time_spent = batch_end_time - batch_start_time
 
         dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
-        perform = {'ce_loss': float(Config.weight_ce * ce_loss),
-                   'center_loss': float(Config.weight_center * center_loss),
-                   'triplet_hard_loss': float(Config.weight_tri * triplet_hard_loss),
-                   'dist_ap_hard': float(dist_ap),
-                   'dist_an_hard': float(dist_an),
-                   'accuracy': float(acc),
+        perform = {'ce': float(Config.weight_ce * ce_loss),
+                   'tri_h': float(Config.weight_tri * triplet_hard_loss),
+                   'type_ce': float(Config.w_type * type_ce_loss),
+                   'color_ce': float(Config.w_color * color_ce_loss),
+                   'dap_h': float(dist_ap),
+                   'dan_h': float(dist_an),
+                   'acc': float(acc),
+                   'acc_type': float(acc_type),
+                   'acc_color': float(acc_color),
                    'time(s)': float(time_spent)}
 
         if i % Config.batch_per_log == 0:
             stage = (epoch, batch)
             text = ''
             for k, v in perform.items():
-                text += ' {}:{:<8.4f}'.format(k, float(v))
+                text += '|{}:{:<8.4f} '.format(k, float(v))
             logger.info('training', text, stage=stage)
 
         for k, v in perform.items():
@@ -188,6 +196,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
         batch_step += 1
 
     scheduler.step()
+
     epoch_end_time = time.time()
     time_spent = sec2min_sec(epoch_start_time, epoch_end_time)
 
@@ -195,7 +204,7 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
         epoch, time_spent[0], time_spent[1])
     for k, vlist in history.items():
         v = mean(vlist)
-        text += '  {}:{:>5.4f}'.format(k, v)
+        text += '|{}:{:>5.4f} '.format(k, v)
         if k != 'time(s)':
             logger.add_scalar('TRAIN_e/'+k, v, epoch)
     logger.info('training', text)
@@ -220,15 +229,12 @@ def prepare(args):
     check_config_dir()
     logger.info('setting', config_info(), time_report=False)
 
-    model = r50ibn_reid_cls(nr_class=Config.nr_class,
-                            nr_feature=Config.nr_feature)
+    model = Baseline(num_classes=Config.nr_class)
     logger.info('setting', model_summary(model), time_report=False)
     logger.info('setting', str(model), time_report=False)
 
-    resize_target = (
-        int(Config.input_shape[0]*1.5), int(Config.input_shape[1]*1.5))
     train_transforms = transforms.Compose([
-        transforms.Resize(resize_target),
+        transforms.Resize(Config.input_shape),
         transforms.RandomApply([
             transforms.ColorJitter(
                 brightness=0.3, contrast=0.3, saturation=0.3, hue=0)
@@ -249,14 +255,14 @@ def prepare(args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    trainset = Veri776_train(transforms=train_transforms)
-    testset = Veri776_test(transforms=test_transforms)
+    trainset = Veri776_train(transforms=train_transforms, need_attr=True)
+    testset = Veri776_test(transforms=test_transforms, need_attr=True)
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
     train_loader = torch.utils.data.DataLoader(
-        trainset, batch_size=Config.batch_size, sampler=pksampler, pin_memory=True)
+        trainset, batch_size=Config.batch_size, sampler=pksampler, num_workers=Config.nr_worker, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(
-        testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), pin_memory=True)
+        testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 
     weight_decay_setting = parm_list_with_Wdecay(model)
     optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
@@ -265,7 +271,8 @@ def prepare(args):
 
     losses = {}
     losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    losses['center_loss'] = CenterLoss(Config.nr_class)
+    losses['type_ce_loss'] = torch.nn.CrossEntropyLoss()
+    losses['color_ce_loss'] = torch.nn.CrossEntropyLoss()
     losses['triplet_hard_loss'] = triplet_hard_loss(
         margin=Config.triplet_margin)
 
@@ -296,6 +303,7 @@ def prepare(args):
     time_spent = sec2min_sec(prepare_start_time, prepare_end_time)
     logger.info('global', 'Finish preparing, time spend: {}mins {}s.'.format(
         time_spent[0], time_spent[1]))
+
     return ret
 
 
@@ -343,9 +351,10 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
     train_end_time = time.time()
     time_spent = sec2min_sec(train_start_time, train_end_time)
 
-    text = 'Finish training, time spent: {:>3}mins {:>3}s\n'.format(
+    text = 'Finish training, time spent: {:>3}mins {:>3}s'.format(
         time_spent[0], time_spent[1])
-    text += 'best mAP:{:>5.4f} in epoch {:>3}; best top1:{:>5.4f} in epoch{:>3f}'.format(
+    logger.info('global', text)
+    text = '##FINISH## best mAP:{:>5.4f} in epoch {:>3}; best top1:{:>5.4f} in epoch{:>3}'.format(
         best_mAP, best_mAP_epoch, best_top1, best_top1_epoch)
     logger.info('global', text)
 
