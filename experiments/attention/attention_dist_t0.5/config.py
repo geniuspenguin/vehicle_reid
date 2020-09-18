@@ -16,7 +16,7 @@ class Config:
     nr_class = 576
     in_planes = 2048
 
-    epoch = 140
+    epoch = 120
     P = 32
     K = 4
     batch_size = int(P*K)
@@ -35,13 +35,17 @@ class Config:
     nr_query = 1678
     nr_test = 11579
 
-    w_type = 0.5
-    w_color = 0.2
+    w_type = 1
+    w_color = 1
 
     nr_worker = 1
+
+    temperature = 0.5
+
 
 
 def config_info():
     attrs = ['%s:%s' % (k, v)
              for k, v in Config.__dict__.items() if '__' not in k]
     return '\n'.join(attrs)
+

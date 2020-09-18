@@ -72,7 +72,6 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     '''
     val_start_time = time.time()
     model.eval()
-    logger.info('testing', 'Start testing')
     all_features, all_labels, all_cids = [], [], []
     history = collections.defaultdict(list)
 
@@ -92,13 +91,13 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
 
-    logger.info('testing', 'Compute CMC and mAP')
+    print('Computing CMC and mAP')
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
-    text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
+    text = 'testing epoch {:>3}, time spent: [{:>3}mins{:>3}s]:##'.format(
         epoch, time_spent[0], time_spent[1])
     text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
     for k, vlist in history.items():

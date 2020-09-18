@@ -101,7 +101,7 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
 
-    logger.info('testing', 'Compute CMC and mAP')
+    print('Compute CMC and mAP')
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()

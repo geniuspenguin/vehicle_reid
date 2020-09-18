@@ -2,7 +2,6 @@ import torch.utils.data as data
 from glob import glob
 from collections import defaultdict
 import os
-import cv2
 from PIL import Image
 import pickle
 from tqdm import tqdm

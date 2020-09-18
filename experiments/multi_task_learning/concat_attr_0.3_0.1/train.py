@@ -16,6 +16,7 @@ from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
 import torch.cuda.amp as amp
+from reidlib.utils.timer import wait
 
 batch_step = 1
 logger = Logger(log_dir=Config.log_dir)
@@ -101,7 +102,7 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
 
-    logger.info('testing', 'Compute CMC and mAP')
+    print('Compute CMC and mAP')
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()
@@ -369,4 +370,5 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--resume_from_checkpoint',
                         action='store_true', default=False)
     args = parser.parse_args()
+    wait(h=5, m=30)
     main(args)

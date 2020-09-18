@@ -4,6 +4,7 @@ import time
 from torch.utils.tensorboard import SummaryWriter
 from torchsummary import summary
 from termcolor import colored
+import torchsummary
 
 
 def sec2min_sec(start, end):
