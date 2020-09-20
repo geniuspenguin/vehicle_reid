@@ -7,7 +7,6 @@ import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 from reidlib.models.weight_init import weights_init_kaiming, weights_init_classifier
 from torchsummary import summary
-from reidlib.utils.timer import wait
 
 
 class Baseline(nn.Module):

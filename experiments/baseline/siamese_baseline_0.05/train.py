@@ -3,10 +3,9 @@ from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
 from reidlib.models.resnet_ibn import resnet50_ibn_a
-from reidlib.utils.loss import triplet_hard_loss
-from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
+from reidlib.utils.loss import triplet_hard_loss, tri_hard_attn
+from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy, get_L2distance_matrix_attn_batch
 import torch
-from model import Baseline
 import time
 import numpy as np
 import torchvision.transforms as transforms
@@ -16,6 +15,7 @@ from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
 import torch.cuda.amp as amp
+from model import Baseline, BinaryClassifier, idlabel2pairlabel
 from reidlib.utils.timer import wait
 
 batch_step = 1
@@ -66,62 +66,72 @@ def lr_multi_func(epoch):
 
 
 @no_grad_func
-def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
+def test(model, bclassifier, test_loader, losses, epoch, nr_query=Config.nr_query):
     '''
     return: cmc1, mAP
     test model on testset and save result to log.
     '''
     val_start_time = time.time()
     model.eval()
+    bclassifier.eval()
     logger.info('testing', 'Start testing')
-    all_features, all_labels, all_cids = [], [], []
-    history = collections.defaultdict(list)
+    all_features_gpu, all_labels, all_cids, all_mask = [], [], [], []
 
-    for i, (imgs, labels, cids, types, colors) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
+    for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='extracting features', total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        types, colors = types.cuda(), colors.cuda()
-        f_norm, p_type, p_color = model(imgs)
+        f_norm, f_mask = model(imgs)
+        all_features_gpu.append(f_norm)
+        all_labels.append(labels)
+        all_mask.append(f_mask)
+        all_cids.append(cids)
 
-        triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
+    features = torch.cat(all_features_gpu, axis=0)
+    alllabels = torch.cat(all_labels, axis=0)
+    allmask = torch.cat(all_mask, axis=0)
+    allcids = torch.cat(all_cids, axis=0)
 
-        acc_type = accuracy(p_type, types)[0]
-        acc_color = accuracy(p_color, colors)[0]
+    q_f_gpu, g_f_gpu = features[:nr_query, ...], features[nr_query:, ...]
+    q_ids, g_ids = alllabels[:nr_query, ...], alllabels[nr_query:, ...]
+    q_cids, g_cids = allcids[:nr_query], allcids[nr_query:]
+    q_mask, g_mask = allmask[:nr_query], allmask[nr_query:]
 
-        history['triplet_hard_loss'].append(float(triplet_hard_loss))
-        history['acc_type'].append(float(acc_type))
-        history['acc_color'].append(float(acc_color))
-
-        all_features.append(f_norm.cpu().detach().numpy())
-        all_labels.append(labels.cpu().detach().numpy())
-        all_cids.append(cids.cpu().detach().numpy())
-
-    all_features = np.concatenate(all_features, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
-    all_cids = np.concatenate(all_cids, axis=0)
-    q_f, g_f = all_features[:nr_query], all_features[nr_query:]
-    q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
-    q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
+    pk_pros = []
+    for start in tqdm(range(0, q_f_gpu.shape[0], Config.eval_P), desc='computing similarity'):
+        end = min(start + Config.eval_P, q_f_gpu.shape[0])
+        p_pros = []
+        for kstart in range(0, g_f_gpu.shape[0], Config.eval_K):
+            kend = min(kstart + Config.eval_K, g_f_gpu.shape[0])
+            pros = bclassifier(
+                q_f_gpu[start: end, ...], g_f_gpu[kstart: kend, ...])
+            pros = pros.reshape(end - start, kend - kstart, 2)
+            p_pros.append(pros)
+        p_pros = torch.cat(p_pros, axis=1)
+        pk_pros.append(p_pros)
+    pros = torch.cat(pk_pros, axis=0)
+    pairlabels = idlabel2pairlabel(q_ids, g_ids)
+    acc = accuracy(pros.reshape(-1, 2), pairlabels)[0]
+    distance_matrix = pros[:, :, 0].cpu().detach().numpy()
+    q_ids = q_ids.cpu().detach().numpy()
+    g_ids = g_ids.cpu().detach().numpy()
+    q_cids = q_cids.cpu().detach().numpy()
+    g_cids = g_cids.cpu().detach().numpy()
 
     print('Compute CMC and mAP')
-    distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
     text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
         epoch, time_spent[0], time_spent[1])
-    text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
-    for k, vlist in history.items():
-        v = float(mean(vlist))
-        text += '|{}:{:>5.4f} '.format(k, v)
-        logger.add_scalar('TEST/'+k, v, epoch)
+    text += 'W/O attention> |CMC1:{:>5.4f} |mAP:{:>5.4f} |ACC:{:>5.4f} '.format(
+        cmc[0], mAP, acc)
     logger.info('testing', text)
 
     logger.add_scalar('TEST/cmc1', cmc[0], epoch)
     logger.add_scalar('TEST/cmc5', cmc[4], epoch)
-    logger.add_scalar('TEST/cmc10', cmc[9], epoch)
     logger.add_scalar('TEST/mAP', mAP, epoch)
-    return cmc, mAP
+    logger.add_scalar('TEST/acc', acc, epoch)
+    return cmc, mAP, acc
 
 
 def get_lr_from_optim(optim):
@@ -129,7 +139,7 @@ def get_lr_from_optim(optim):
         return param_group['lr']
 
 
-def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
+def train_one_epoch(model, bclassifier, train_loader, losses, optimizer, scheduler, epoch):
     global batch_step
 
     epoch_start_time = time.time()
@@ -138,49 +148,44 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
 
     scaler = amp.GradScaler()
     model.train()
+    bclassifier.train()
     history = collections.defaultdict(list)
-    for i, (imgs, labels, _, types, colors) in enumerate(train_loader):
-
+    for i, (imgs, labels) in enumerate(train_loader):
         batch = i + 1
         batch_start_time = time.time()
 
         imgs, labels = imgs.cuda(), labels.cuda()
-        types, colors = types.cuda(), colors.cuda()
-
+        pair_labels = idlabel2pairlabel(labels, labels)
         with amp.autocast():
-            f_bn, p, p_type, p_color = model(imgs)
-            ce_loss = losses['cross_entropy_loss'](p, labels)
-            triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
-            type_ce_loss = losses['type_ce_loss'](p_type, types)
-            color_ce_loss = losses['color_ce_loss'](p_color, colors)
-            loss = Config.weight_ce * ce_loss
-            loss += Config.weight_tri * triplet_hard_loss
-            loss += Config.w_type * type_ce_loss
-            loss += Config.w_color * color_ce_loss
+            f_bn, p, f_mask = model(imgs)
+            p_same = bclassifier(f_bn, f_bn)
+            id_loss = losses['cross_entropy_loss'](p, labels)
+            pair_loss = losses['pair_loss'](p_same, pair_labels)
+            loss = Config.weight_ce * id_loss
+            loss += Config.weight_pairloss * pair_loss
 
+    
         scaler.scale(loss).backward()
 
         scaler.step(optimizer)
         scaler.update()
-
         optimizer.zero_grad()
 
+        sortmask = torch.sort(f_mask, dim=1)[0]
+        bottom20mean = sortmask[:, :20].mean()
+        top20mean = sortmask[:, -20:].mean()
+
         acc = accuracy(p, labels)[0]
-        acc_type = accuracy(p_type, types)[0]
-        acc_color = accuracy(p_color, colors)[0]
+        acc_pair = accuracy(p_same, pair_labels)[0]
         batch_end_time = time.time()
         time_spent = batch_end_time - batch_start_time
 
-        dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
-        perform = {'ce': float(Config.weight_ce * ce_loss),
-                   'tri_h': float(Config.weight_tri * triplet_hard_loss),
-                   'type_ce': float(Config.w_type * type_ce_loss),
-                   'color_ce': float(Config.w_color * color_ce_loss),
-                   'dap_h': float(dist_ap),
-                   'dan_h': float(dist_an),
-                   'acc': float(acc),
-                   'acc_type': float(acc_type),
-                   'acc_color': float(acc_color),
+        perform = {'id_loss': float(Config.weight_ce * id_loss),
+                   'pair_loss': float(Config.weight_pairloss * pair_loss),
+                   'acc_id': float(acc),
+                   'acc_pair': float(acc_pair),
+                #    'mtop20': float(top20mean),
+                #    'mbot20': float(bottom20mean),
                    'time(s)': float(time_spent)}
 
         if i % Config.batch_per_log == 0:
@@ -230,9 +235,11 @@ def prepare(args):
     check_config_dir()
     logger.info('setting', config_info(), time_report=False)
 
-    model = Baseline(num_classes=Config.nr_class)
+    model = Baseline(num_classes=Config.nr_class).cuda()
     logger.info('setting', model_summary(model), time_report=False)
     logger.info('setting', str(model), time_report=False)
+
+    bclassifier = BinaryClassifier(Config.in_planes).cuda()
 
     train_transforms = transforms.Compose([
         transforms.Resize(Config.input_shape),
@@ -256,8 +263,8 @@ def prepare(args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    trainset = Veri776_train(transforms=train_transforms, need_attr=True)
-    testset = Veri776_test(transforms=test_transforms, need_attr=True)
+    trainset = Veri776_train(transforms=train_transforms)
+    testset = Veri776_test(transforms=test_transforms)
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
     train_loader = torch.utils.data.DataLoader(
@@ -266,17 +273,15 @@ def prepare(args):
         testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 
     weight_decay_setting = parm_list_with_Wdecay(model)
+    weight_decay_setting_bc = parm_list_with_Wdecay(bclassifier)
+    weight_decay_setting += weight_decay_setting_bc
     optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lr_multi_func)
 
     losses = {}
     losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    losses['type_ce_loss'] = torch.nn.CrossEntropyLoss()
-    losses['color_ce_loss'] = torch.nn.CrossEntropyLoss()
-    losses['triplet_hard_loss'] = triplet_hard_loss(
-        margin=Config.triplet_margin)
-
+    losses['pair_loss'] = torch.nn.CrossEntropyLoss()
     for k in losses.keys():
         losses[k] = losses[k].cuda()
 
@@ -294,6 +299,7 @@ def prepare(args):
     ret = {
         'start_epoch': start_epoch,
         'model': model,
+        'bclassifier': bclassifier,
         'train_loader': train_loader,
         'test_loader': test_loader,
         'optimizer': optimizer,
@@ -308,8 +314,13 @@ def prepare(args):
     return ret
 
 
-def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_epoch,):
+def start(model, bclassifier, train_loader, test_loader, optimizer, scheduler, losses, start_epoch,):
     train_start_time = time.time()
+
+    # best_mAP_a = 0.0
+    # best_mAP_a_epoch = 0
+    # best_top1_a = 0.0
+    # best_top1_a_epoch = 0
 
     best_mAP = 0.0
     best_mAP_epoch = 0
@@ -318,11 +329,11 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
 
     logger.info('global', 'Start training.')
     for epoch in range(start_epoch, Config.epoch + 1):
-        train_one_epoch(model, train_loader, losses,
+        train_one_epoch(model, bclassifier, train_loader, losses,
                         optimizer, scheduler, epoch)
 
         if epoch % Config.epoch_per_test == 0:
-            cmc, mAP = test(model, test_loader, losses, epoch)
+            cmc, mAP, _ = test(model, bclassifier, test_loader, losses, epoch)
             top1 = cmc[0]
             if top1 > best_top1:
                 best_top1 = top1
@@ -333,7 +344,8 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
 
         if epoch % Config.epoch_per_save == 0:
             if Config.epoch_per_test % Config.epoch_per_save != 0:
-                cmc, mAP = test(model, test_loader, losses, epoch)
+                cmc, mAP, _ = test(model, bclassifier,
+                                   test_loader, losses, epoch)
             file_name = 'epoch-{:0>3}'.format(epoch) + '.pth'
             save_dict = {'model': model.state_dict(),
                          'optimizer': optimizer.state_dict(),
@@ -355,6 +367,8 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
     text = 'Finish training, time spent: {:>3}mins {:>3}s'.format(
         time_spent[0], time_spent[1])
     logger.info('global', text)
+    # text = '##FINISH## best mAP_a:{:>5.4f} in epoch {:>3}; best top1_a:{:>5.4f} in epoch{:>3}'.format(
+    #     best_mAP_a, best_mAP_a_epoch, best_top1_a, best_top1_a_epoch)
     text = '##FINISH## best mAP:{:>5.4f} in epoch {:>3}; best top1:{:>5.4f} in epoch{:>3}'.format(
         best_mAP, best_mAP_epoch, best_top1, best_top1_epoch)
     logger.info('global', text)
@@ -370,5 +384,5 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--resume_from_checkpoint',
                         action='store_true', default=False)
     args = parser.parse_args()
-    # wait(h=5, m=30)
+    wait(h=4, m=30)
     main(args)
