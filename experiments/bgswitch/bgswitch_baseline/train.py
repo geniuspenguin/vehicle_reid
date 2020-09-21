@@ -72,24 +72,14 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     '''
     val_start_time = time.time()
     model.eval()
-    logger.info('testing', 'Start testing')
     all_features, all_labels, all_cids = [], [], []
     history = collections.defaultdict(list)
 
-    for i, (imgs, labels, cids, types, colors) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
+    for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        types, colors = types.cuda(), colors.cuda()
-        f_norm, p_type, p_color = model(imgs)
-
+        f_norm = model(imgs)
         triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
-
-        acc_type = accuracy(p_type, types)[0]
-        acc_color = accuracy(p_color, colors)[0]
-
         history['triplet_hard_loss'].append(float(triplet_hard_loss))
-        history['acc_type'].append(float(acc_type))
-        history['acc_color'].append(float(acc_color))
-
         all_features.append(f_norm.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
@@ -101,13 +91,13 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
 
-    print('Compute CMC and mAP')
+    print('Computing CMC and mAP')
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
-    text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
+    text = 'testing epoch {:>3}, time spent: [{:>3}mins{:>3}s]:##'.format(
         epoch, time_spent[0], time_spent[1])
     text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
     for k, vlist in history.items():
@@ -138,24 +128,19 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
     scaler = amp.GradScaler()
     model.train()
     history = collections.defaultdict(list)
-    for i, (imgs, labels, _, types, colors) in enumerate(train_loader):
+    for i, (imgs, labels, mask) in enumerate(train_loader):
 
         batch = i + 1
         batch_start_time = time.time()
 
         imgs, labels = imgs.cuda(), labels.cuda()
-        types, colors = types.cuda(), colors.cuda()
 
         with amp.autocast():
-            f_bn, p, p_type, p_color = model(imgs)
+            f_bn, p = model(imgs)
             ce_loss = losses['cross_entropy_loss'](p, labels)
             triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
-            type_ce_loss = losses['type_ce_loss'](p_type, types)
-            color_ce_loss = losses['color_ce_loss'](p_color, colors)
             loss = Config.weight_ce * ce_loss
             loss += Config.weight_tri * triplet_hard_loss
-            loss += Config.w_type * type_ce_loss
-            loss += Config.w_color * color_ce_loss
 
         scaler.scale(loss).backward()
 
@@ -165,21 +150,15 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
         optimizer.zero_grad()
 
         acc = accuracy(p, labels)[0]
-        acc_type = accuracy(p_type, types)[0]
-        acc_color = accuracy(p_color, colors)[0]
         batch_end_time = time.time()
         time_spent = batch_end_time - batch_start_time
 
         dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
-        perform = {'ce': float(Config.weight_ce * ce_loss),
-                   'tri_h': float(Config.weight_tri * triplet_hard_loss),
-                   'type_ce': float(Config.w_type * type_ce_loss),
-                   'color_ce': float(Config.w_color * color_ce_loss),
-                   'dap_h': float(dist_ap),
-                   'dan_h': float(dist_an),
-                   'acc': float(acc),
-                   'acc_type': float(acc_type),
-                   'acc_color': float(acc_color),
+        perform = {'ce_loss': float(Config.weight_ce * ce_loss),
+                   'triplet_hard_loss': float(Config.weight_tri * triplet_hard_loss),
+                   'dist_ap_hard': float(dist_ap),
+                   'dist_an_hard': float(dist_an),
+                   'accuracy': float(acc),
                    'time(s)': float(time_spent)}
 
         if i % Config.batch_per_log == 0:
@@ -234,6 +213,7 @@ def prepare(args):
     logger.info('setting', str(model), time_report=False)
 
     train_transforms = transforms.Compose([
+        transforms.ToPILImage(),
         transforms.Resize(Config.input_shape),
         transforms.RandomApply([
             transforms.ColorJitter(
@@ -255,8 +235,8 @@ def prepare(args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    trainset = Veri776_train(transforms=train_transforms, need_attr=True)
-    testset = Veri776_test(transforms=test_transforms, need_attr=True)
+    trainset = Veri776_train(transforms=train_transforms, need_mask=True, bg_switch=Config.p_bgswitch)
+    testset = Veri776_test(transforms=test_transforms)
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
     train_loader = torch.utils.data.DataLoader(
@@ -271,8 +251,6 @@ def prepare(args):
 
     losses = {}
     losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    losses['type_ce_loss'] = torch.nn.CrossEntropyLoss()
-    losses['color_ce_loss'] = torch.nn.CrossEntropyLoss()
     losses['triplet_hard_loss'] = triplet_hard_loss(
         margin=Config.triplet_margin)
 

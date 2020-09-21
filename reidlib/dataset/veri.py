@@ -19,6 +19,12 @@ train_name = open(os.path.join(rootdir, 'name_train.txt'), 'r').readlines()
 train_set = [item.strip() for item in train_name]
 
 
+mask_path = '/home/peng/Documents/data/VeRi/masks'
+train_mask_path = os.path.join(mask_path, 'train/')
+query_mask_path = os.path.join(mask_path, 'query/')
+gallery_mask_path = os.path.join(mask_path, 'gallery/')
+
+
 def get_dict(path):
     xmlp = ET.XMLParser(encoding="utf-8")
     tree = ET.parse(path, parser=xmlp)
@@ -51,7 +57,8 @@ def update_data_info(dirname, name2attr, vid2attr):
             if vid not in vid2attr:
                 miss += 1
                 continue
-            name2attr[fname] = vid2attr[vid]
+            name2attr[fname] = {}
+            name2attr[fname].update(vid2attr[vid])
         name2attr[fname]['path'] = fpath
     print(dirname, 'miss %d' % miss)
 
@@ -66,6 +73,8 @@ def generate_data_info():
 
     tname2attr = {}
     for name, attr in tname2attr_tmp.items():
+        if name != attr['path'].split('/')[-1]:
+            print('##', name, attr)
         if name in train_set:
             tname2attr[name] = attr
 
@@ -75,6 +84,9 @@ def generate_data_info():
             qname2attr[name] = attr
         else:
             gname2attr[name] = attr
+    update_mask_info(tname2attr, train_mask_path)
+    update_mask_info(qname2attr, query_mask_path)
+    update_mask_info(gname2attr, gallery_mask_path)
     save_pkl = {'train': tname2attr,
                 'query': qname2attr, 'gallery': gname2attr}
     for k, x in save_pkl.items():
@@ -82,6 +94,16 @@ def generate_data_info():
     with open(os.path.join(rootdir, 'data_info.pkl'), 'wb') as f:
         pickle.dump(save_pkl, f)
 
+def update_mask_info(metas, path):
+    name2path = {}
+    for f in glob.glob(os.path.join(path, '*.png')):
+        name = f.split('/')[-1]
+        name = name.replace('.png', '.jpg')
+        name2path[name] = f
+    for k, meta in metas.items():
+        imgname = meta['imageName']
+        if imgname in name2path:
+            meta.update({'mask_path': name2path[imgname]})
 
 if __name__ == '__main__':
     # generate_data_info()
@@ -91,6 +113,8 @@ if __name__ == '__main__':
 
     for k, dic in info.items():
         print(k)
-        for k, v in dic.items():
-            print(k, v)
-            break
+        for i, (k, v) in enumerate(dic.items()):
+            if i < 3:
+                print(k, v)
+            if 'mask_path' not in v:
+                print('###', k, v)

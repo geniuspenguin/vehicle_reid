@@ -134,3 +134,5 @@ pretrain/
 runs/
 temp*
 expr_logs/
+output/
+*#*/

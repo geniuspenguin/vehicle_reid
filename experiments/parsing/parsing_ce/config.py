@@ -17,18 +17,17 @@ class Config:
     in_planes = 2048
 
     epoch = 120
-    P = 4
-    K = 32
+    P = 32
+    K = 4
     batch_size = int(P*K)
-
-    eval_P = 8
-    eval_K = 16
 
     weight_decay = 5e-4
     lr = 3.5e-4
-
-    weight_ce = 1
-    weight_pairloss = 0.01
+    triplet_margin = 1.2
+    # 0: main brach loss 1: front branch loss 2: backward branch loss
+    # 3: top branch loss 4: side branch loss
+    weight_ce = [1, 0.1, 0.1, 0.1, 0.1]
+    weight_tri = [1, 1, 1, 1, 1]
 
     batch_per_log = 1
     epoch_per_test = 5
@@ -36,15 +35,23 @@ class Config:
 
     nr_query = 1678
     nr_test = 11579
-    
-    nr_worker = 1
 
-    temperature = 0.1
+    w_type = 1
+    w_color = 1
 
+    nr_worker = 6
+
+    p_bgswitch = 0
+    nr_mask = 4
+
+    branch_margin = 0.6
+    soft_marigin = True
+    ce_thres = [0.6, 0.6, 1, 0.4]
+    # 0: front branch loss 1: backward branch loss
+    # 2: top branch loss 3: side branch loss
 
 
 def config_info():
     attrs = ['%s:%s' % (k, v)
              for k, v in Config.__dict__.items() if '__' not in k]
     return '\n'.join(attrs)
-

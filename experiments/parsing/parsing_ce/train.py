@@ -3,10 +3,10 @@ from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
 from reidlib.models.resnet_ibn import resnet50_ibn_a
-from reidlib.utils.loss import triplet_hard_loss
+from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_hard_loss, weight_cross_entropy
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
-from model import Baseline
+from model import Backbone, main_branch, parsing_branch
 import time
 import numpy as np
 import torchvision.transforms as transforms
@@ -16,7 +16,7 @@ from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
 import torch.cuda.amp as amp
-from reidlib.utils.timer import wait
+from reidlib.utils.parsing import get_weight
 
 batch_step = 1
 logger = Logger(log_dir=Config.log_dir)
@@ -53,6 +53,28 @@ def parm_list_with_Wdecay(model):
     return param_list
 
 
+def parm_list_with_Wdecay_multi(models):
+    conv_and_fc_param_list, bn_param_list = [], []
+    for model in models:
+        for name, param in model.named_parameters():
+            if 'bn' in name:
+                bn_param_list.append(param)
+            else:
+                conv_and_fc_param_list.append(param)
+
+    param_list = [
+        {
+            'params': conv_and_fc_param_list,
+            'weight_decay': Config.weight_decay,
+        },
+        {
+            'params': bn_param_list,
+            'weight_decay': 0.0,
+        },
+    ]
+    return param_list
+
+
 def lr_multi_func(epoch):
     epoch += 1
     if epoch <= 10:
@@ -66,32 +88,24 @@ def lr_multi_func(epoch):
 
 
 @no_grad_func
-def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
+def test(model, branches, test_loader, losses, epoch, nr_query=Config.nr_query):
     '''
     return: cmc1, mAP
     test model on testset and save result to log.
     '''
     val_start_time = time.time()
     model.eval()
-    logger.info('testing', 'Start testing')
     all_features, all_labels, all_cids = [], [], []
     history = collections.defaultdict(list)
-
-    for i, (imgs, labels, cids, types, colors) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
+    for branch in branches:
+        branch.eval()
+    for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        types, colors = types.cuda(), colors.cuda()
-        f_norm, p_type, p_color = model(imgs)
-
-        triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
-
-        acc_type = accuracy(p_type, types)[0]
-        acc_color = accuracy(p_color, colors)[0]
-
+        x = model(imgs)
+        f_main = branches[0](x)
+        triplet_hard_loss = losses['triplet_hard_loss'][0](f_main, labels)
         history['triplet_hard_loss'].append(float(triplet_hard_loss))
-        history['acc_type'].append(float(acc_type))
-        history['acc_color'].append(float(acc_color))
-
-        all_features.append(f_norm.cpu().detach().numpy())
+        all_features.append(f_main.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
 
@@ -102,13 +116,13 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
 
-    print('Compute CMC and mAP')
+    print('Computing CMC and mAP')
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
-    text = 'Finish testing epoch {:>3}, time spent: [{:>3}mins{:>3}s], performance:\n##'.format(
+    text = 'testing epoch {:>3}, time spent: [{:>3}mins{:>3}s]:##'.format(
         epoch, time_spent[0], time_spent[1])
     text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
     for k, vlist in history.items():
@@ -129,7 +143,7 @@ def get_lr_from_optim(optim):
         return param_group['lr']
 
 
-def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
+def train_one_epoch(model, branches, nr_mask, train_loader, losses, optimizer, scheduler, epoch):
     global batch_step
 
     epoch_start_time = time.time()
@@ -138,25 +152,41 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
 
     scaler = amp.GradScaler()
     model.train()
+    for branch in branches:
+        branch.train()
     history = collections.defaultdict(list)
-    for i, (imgs, labels, _, types, colors) in enumerate(train_loader):
+    for i, (imgs, labels, masks) in enumerate(train_loader):
 
         batch = i + 1
         batch_start_time = time.time()
 
-        imgs, labels = imgs.cuda(), labels.cuda()
-        types, colors = types.cuda(), colors.cuda()
+        imgs, labels, masks = imgs.cuda(), labels.cuda(), masks.float().cuda()
 
         with amp.autocast():
-            f_bn, p, p_type, p_color = model(imgs)
-            ce_loss = losses['cross_entropy_loss'](p, labels)
-            triplet_hard_loss = losses['triplet_hard_loss'](f_bn, labels)
-            type_ce_loss = losses['type_ce_loss'](p_type, types)
-            color_ce_loss = losses['color_ce_loss'](p_color, colors)
-            loss = Config.weight_ce * ce_loss
-            loss += Config.weight_tri * triplet_hard_loss
-            loss += Config.w_type * type_ce_loss
-            loss += Config.w_color * color_ce_loss
+            loss = 0
+            parsing_celoss = [0] * nr_mask
+            parsing_triloss = [0] * nr_mask
+            x = model(imgs)
+            weights = get_weight(masks)
+            f_main, p = branches[0](x)
+            ce_loss = losses['cross_entropy_loss'][0](p, labels)
+            triplet_hard_loss = losses['triplet_hard_loss'][0](f_main, labels)
+            loss += Config.weight_ce[0] * ce_loss
+            loss += Config.weight_tri[0] * triplet_hard_loss
+            for b, branch in enumerate(branches):
+                if b == 0:  # main branch
+                    continue
+                mask = masks[:, b-1: b, ...]
+                f, logit = branch(x, mask)
+                w = weights[:, b-1]
+                pce_loss = losses['cross_entropy_loss'][b](logit, labels, w)
+                # ptriplet_hard_loss = losses['triplet_hard_loss'][b](
+                #     f, w, labels)
+                # ptriplet_hard_loss = losses['triplet_hard_loss'][0](
+                #     f, labels)
+                parsing_celoss[b-1] = Config.weight_ce[b] * pce_loss
+                # parsing_triloss += Config.weight_tri[b] * ptriplet_hard_loss
+            loss = loss + sum(parsing_celoss) + sum(parsing_triloss)
 
         scaler.scale(loss).backward()
 
@@ -166,28 +196,28 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
         optimizer.zero_grad()
 
         acc = accuracy(p, labels)[0]
-        acc_type = accuracy(p_type, types)[0]
-        acc_color = accuracy(p_color, colors)[0]
         batch_end_time = time.time()
         time_spent = batch_end_time - batch_start_time
-
-        dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
-        perform = {'ce': float(Config.weight_ce * ce_loss),
-                   'tri_h': float(Config.weight_tri * triplet_hard_loss),
-                   'type_ce': float(Config.w_type * type_ce_loss),
-                   'color_ce': float(Config.w_color * color_ce_loss),
-                   'dap_h': float(dist_ap),
-                   'dan_h': float(dist_an),
-                   'acc': float(acc),
-                   'acc_type': float(acc_type),
-                   'acc_color': float(acc_color),
-                   'time(s)': float(time_spent)}
+        dist_ap, dist_an = losses['triplet_hard_loss'][0].get_mean_hard_dist()
+        perform = {}
+        for i in range(nr_mask):
+            if i == 2: continue # skip top-side loss
+            perform.update({'p%d_ce' % (i+1): float(parsing_celoss[i])})
+        for i in range(nr_mask):
+            if i == 2: continue # skip top-side loss
+            perform.update({'p%d_tri' % (i+1): float(parsing_triloss[i])})
+        perform.update({'ce': float(Config.weight_ce[0] * ce_loss),
+                        'tri': float(Config.weight_tri[0] * triplet_hard_loss),
+                        'dap': float(dist_ap),
+                        'dan': float(dist_an),
+                        'acc': float(acc),
+                        't': float(time_spent)})
 
         if i % Config.batch_per_log == 0:
             stage = (epoch, batch)
             text = ''
             for k, v in perform.items():
-                text += '|{}:{:<8.4f} '.format(k, float(v))
+                text += '|{}:{:<6.4f} '.format(k, float(v))
             logger.info('training', text, stage=stage)
 
         for k, v in perform.items():
@@ -230,11 +260,19 @@ def prepare(args):
     check_config_dir()
     logger.info('setting', config_info(), time_report=False)
 
-    model = Baseline(num_classes=Config.nr_class)
+    model = Backbone()
+    model = model.cuda()
     logger.info('setting', model_summary(model), time_report=False)
     logger.info('setting', str(model), time_report=False)
 
+    branches = [main_branch(Config.nr_class, Config.in_planes),
+                parsing_branch(Config.nr_class, Config.in_planes),
+                parsing_branch(Config.nr_class, Config.in_planes),
+                parsing_branch(Config.nr_class, Config.in_planes),
+                parsing_branch(Config.nr_class, Config.in_planes)]
+
     train_transforms = transforms.Compose([
+        transforms.ToPILImage(),
         transforms.Resize(Config.input_shape),
         transforms.RandomApply([
             transforms.ColorJitter(
@@ -256,8 +294,9 @@ def prepare(args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    trainset = Veri776_train(transforms=train_transforms, need_attr=True)
-    testset = Veri776_test(transforms=test_transforms, need_attr=True)
+    trainset = Veri776_train(transforms=train_transforms,
+                             need_mask=True, bg_switch=Config.p_bgswitch)
+    testset = Veri776_test(transforms=test_transforms)
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
     train_loader = torch.utils.data.DataLoader(
@@ -265,20 +304,35 @@ def prepare(args):
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 
-    weight_decay_setting = parm_list_with_Wdecay(model)
+    weight_decay_setting = parm_list_with_Wdecay_multi([model] + branches)
     optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lr_multi_func)
 
     losses = {}
-    losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    losses['type_ce_loss'] = torch.nn.CrossEntropyLoss()
-    losses['color_ce_loss'] = torch.nn.CrossEntropyLoss()
-    losses['triplet_hard_loss'] = triplet_hard_loss(
-        margin=Config.triplet_margin)
+    losses['cross_entropy_loss'] = [torch.nn.CrossEntropyLoss(),
+                                    weight_cross_entropy(Config.ce_thres[0]), weight_cross_entropy(
+                                        Config.ce_thres[1]),
+                                    weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
+    losses['triplet_hard_loss'] = [triplet_hard_loss(margin=Config.triplet_margin),
+                                   weighted_triplet_hard_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin),
+                                   weighted_triplet_hard_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin),
+                                   weighted_triplet_hard_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin),
+                                   weighted_triplet_hard_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin)]
 
     for k in losses.keys():
-        losses[k] = losses[k].cuda()
+        if isinstance(losses[k], list):
+            for i in range(len(losses[k])):
+                losses[k][i] = losses[k][i].cuda()
+        else:
+            losses[k] = losses[k].cuda()
+
+    for i in range(len(branches)):
+        branches[i] = branches[i].cuda()
 
     start_epoch = 0
     if resume_from_checkpoint and os.path.exists(Config.checkpoint_path):
@@ -294,6 +348,7 @@ def prepare(args):
     ret = {
         'start_epoch': start_epoch,
         'model': model,
+        'branches': branches,
         'train_loader': train_loader,
         'test_loader': test_loader,
         'optimizer': optimizer,
@@ -308,7 +363,7 @@ def prepare(args):
     return ret
 
 
-def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_epoch,):
+def start(model, branches, train_loader, test_loader, optimizer, scheduler, losses, start_epoch,):
     train_start_time = time.time()
 
     best_mAP = 0.0
@@ -318,11 +373,11 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
 
     logger.info('global', 'Start training.')
     for epoch in range(start_epoch, Config.epoch + 1):
-        train_one_epoch(model, train_loader, losses,
+        train_one_epoch(model, branches, Config.nr_mask, train_loader, losses,
                         optimizer, scheduler, epoch)
 
         if epoch % Config.epoch_per_test == 0:
-            cmc, mAP = test(model, test_loader, losses, epoch)
+            cmc, mAP = test(model, branches, test_loader, losses, epoch)
             top1 = cmc[0]
             if top1 > best_top1:
                 best_top1 = top1
@@ -333,7 +388,7 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
 
         if epoch % Config.epoch_per_save == 0:
             if Config.epoch_per_test % Config.epoch_per_save != 0:
-                cmc, mAP = test(model, test_loader, losses, epoch)
+                cmc, mAP = test(model, branches, test_loader, losses, epoch)
             file_name = 'epoch-{:0>3}'.format(epoch) + '.pth'
             save_dict = {'model': model.state_dict(),
                          'optimizer': optimizer.state_dict(),
@@ -370,5 +425,4 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--resume_from_checkpoint',
                         action='store_true', default=False)
     args = parser.parse_args()
-    # wait(h=5, m=30)
     main(args)

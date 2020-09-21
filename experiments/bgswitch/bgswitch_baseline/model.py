@@ -27,28 +27,15 @@ class Baseline(nn.Module):
         self.bn.apply(weights_init_kaiming)
         self.fc.apply(weights_init_classifier)
 
-        self.fc_attn = nn.Linear(self.in_planes, self.in_planes)
-        self.bn_attn = nn.BatchNorm1d(self.in_planes)
-        self.bn_attn.bias.requires_grad_(False)
-        self.sigmoid = nn.Sigmoid()
-
-        self.fc_attn.apply(weights_init_kaiming)
-        self.bn_attn.apply(weights_init_kaiming)
-
     def forward(self, x):
         x = self.backbone(x)
         global_feats = self.gap(x)  # (b, 2048, 1, 1)
         global_feats = global_feats.view(
             global_feats.shape[0], -1)  # flatten to (bs, 2048)
         feats = self.bn(global_feats)  # normalize for angular softmax
-
-        mask = self.fc_attn(feats)
-        mask = self.bn_attn(mask)
-        mask = self.sigmoid(mask)
-
         if self.training:
             cls_score = self.fc(feats)
-            return feats, cls_score, mask
+            return feats, cls_score
         else:
             feats = nn.functional.normalize(feats, dim=1, p=2)
-            return feats, mask
+            return feats

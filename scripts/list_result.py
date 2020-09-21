@@ -14,10 +14,10 @@ if __name__ == '__main__':
         print('loading ', f, end=' ')
         ret = torch.load(f)
         for k, v in ret.items():
-            if isinstance(v, int) or isinstance(v, float):
+            if isinstance(v, int) or isinstance(v, float) or k == 'mAP' or k == 'top1':
                 history[k].append(v)
                 print('{}: {:.5f}'.format(k, v), end=' ')
         print('')
 
     for k, v in history.items():
-        print("max:{:.5f}  min:{:.5f}".format(max(v), min(v)))
+        print("[{}]max:{:.5f}  min:{:.5f}".format(k, max(v), min(v)))
