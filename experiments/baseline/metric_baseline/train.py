@@ -16,6 +16,7 @@ from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
 import torch.cuda.amp as amp
+from reidlib.utils.timer import wait
 
 batch_step = 1
 logger = Logger(log_dir=Config.log_dir)
@@ -346,5 +347,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--resume_from_checkpoint',
                         action='store_true', default=False)
+    parser.add_argument('-w', '--wait_m', type=int, default=0)
     args = parser.parse_args()
+    if args.wait_m:
+        wait(m=args.wait_m)
     main(args)
