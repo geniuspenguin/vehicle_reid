@@ -15,7 +15,7 @@ def get_weight(masks):
         masks = masks.float()
     total_mask = torch.sum(masks, (1, 2, 3)).reshape(masks.shape[0], 1)
     part_mask = torch.sum(masks, (2, 3))
-    weights = part_mask / total_mask
+    weights = part_mask / (total_mask+1)
     return weights
 
 def get_reshape_mask(mask: torch.Tensor, target_shape):

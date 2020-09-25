@@ -180,13 +180,13 @@ def train_one_epoch(model, branches, nr_mask, train_loader, losses, optimizer, s
                 mask = masks[:, b-1: b, ...]
                 f, logit = branch(x, mask)
                 w = weights[:, b-1]
-                pce_loss = losses['cross_entropy_loss'][b](logit, labels, w)
+                # pce_loss = losses['cross_entropy_loss'][b](logit, labels, w)
                 # ptriplet_hard_loss = losses['triplet_hard_loss'][b](
                 #     f, w, labels)
-                # ptriplet_hard_loss = losses['triplet_hard_loss'][0](
-                #     f, labels)
-                parsing_celoss[b-1] = Config.weight_ce[b] * pce_loss
-                # parsing_triloss += Config.weight_tri[b] * ptriplet_hard_loss
+                ptriplet_hard_loss = losses['triplet_hard_loss'][b](
+                    f, labels, w)
+                # parsing_celoss[b-1] = Config.weight_ce[b] * pce_loss
+                parsing_triloss[b-1] = Config.weight_tri[b] * ptriplet_hard_loss
             loss = loss + sum(parsing_celoss) + sum(parsing_triloss)
 
         scaler.scale(loss).backward()
@@ -201,10 +201,10 @@ def train_one_epoch(model, branches, nr_mask, train_loader, losses, optimizer, s
         time_spent = batch_end_time - batch_start_time
         dist_ap, dist_an = losses['triplet_hard_loss'][0].get_mean_hard_dist()
         perform = {}
-        for i in range(nr_mask):
-            perform.update({'p%d_ce' % (i+1): float(parsing_celoss[i])})
         # for i in range(nr_mask):
-        #     perform.update({'p%d_tri' % (i+1): float(parsing_triloss[i])})
+        #     perform.update({'p%d_ce' % (i+1): float(parsing_celoss[i])})
+        for i in range(nr_mask):
+            perform.update({'p%d_tri' % (i+1): float(parsing_triloss[i])})
         perform.update({'ce': float(Config.weight_ce[0] * ce_loss),
                         'tri': float(Config.weight_tri[0] * triplet_hard_loss),
                         'dap': float(dist_ap),
@@ -314,14 +314,10 @@ def prepare(args):
                                         Config.ce_thres[1]),
                                     weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
     losses['triplet_hard_loss'] = [triplet_hard_loss(margin=Config.triplet_margin),
-                                   weighted_triplet_hard_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin),
-                                   weighted_triplet_hard_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin),
-                                   weighted_triplet_hard_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin),
-                                   weighted_triplet_hard_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin)]
+                                   weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
+                                   weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
+                                   weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
+                                   weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin)]
 
     for k in losses.keys():
         if isinstance(losses[k], list):

@@ -24,48 +24,27 @@ def _triplet_hard_loss(qry, gry, q_ids, g_ids, margin, sqrt=True):
     return tri_loss, dist_ap_hard.mean(), dist_an_hard.mean()
 
 
-def _weighted_triplet_hard_loss(distance, q_ids, g_ids, weights, margin, soft_margin=True, sqrt=True):
+def _weighted_triplet_hard_loss(distance, q_ids, g_ids, weights, margin, soft_margin=True, sqrt=True, mask=None):
     positive_mask = (q_ids.reshape(-1, 1) == g_ids.reshape(1, -1)).float()
     negative_mask = 1 - positive_mask
-    distance = distance * weights
     dist_ap = distance * positive_mask
     dist_ap_hard, idx_ap_hard = dist_ap.max(axis=1)
     weight_ap_hard = weights[torch.arange(q_ids.shape[0]), idx_ap_hard]
+    wdist_ap_hard = weight_ap_hard * dist_ap_hard
 
     dist_an = distance * negative_mask
     max_dist_an = dist_an.max()
     dist_an = distance * negative_mask + max_dist_an * (1 - negative_mask)
     dist_an_hard, idx_an_hard = dist_an.min(axis=1)
     weight_an_hard = weights[torch.arange(q_ids.shape[0]), idx_an_hard]
+    wdist_an_hard = weight_an_hard * dist_an_hard
 
     if soft_margin:
         margin = weight_an_hard * weight_ap_hard * margin
 
-    tri = (dist_ap_hard - dist_an_hard + margin).clamp(min=0)
+    tri = (wdist_ap_hard - wdist_an_hard + margin).clamp(min=0)
     tri_loss = tri.mean()
     return tri_loss
-
-def _weighted_triplet_hard_loss2(distance, q_ids, g_ids, weights, margin, soft_margin=True, sqrt=True):
-    positive_mask = (q_ids.reshape(-1, 1) == g_ids.reshape(1, -1)).float()
-    negative_mask = 1 - positive_mask
-    distance = distance * weights
-    dist_ap = distance * positive_mask
-    dist_ap_hard, idx_ap_hard = dist_ap.max(axis=1)
-    weight_ap_hard = weights[torch.arange(q_ids.shape[0]), idx_ap_hard]
-
-    dist_an = distance * negative_mask
-    max_dist_an = dist_an.max()
-    dist_an = distance * negative_mask + max_dist_an * (1 - negative_mask)
-    dist_an_hard, idx_an_hard = dist_an.min(axis=1)
-    weight_an_hard = weights[torch.arange(q_ids.shape[0]), idx_an_hard]
-
-    if soft_margin:
-        margin = weight_an_hard * weight_ap_hard * margin
-
-    tri = (dist_ap_hard - dist_an_hard + margin).clamp(min=0)
-    tri_loss = tri.mean()
-    return tri_loss
-
 
 def _triplet_hard_loss_new(distance, q_ids, g_ids, margin):
     positive_mask = (q_ids.reshape(-1, 1) == g_ids.reshape(1, -1)).float()
@@ -129,7 +108,7 @@ class weighted_triplet_hard_loss(triplet_hard_loss_base):
         super().__init__(margin=margin, sqrt=sqrt)
         self.soft_margin = soft_margin
 
-    def forward(self, x, w, labels):
+    def forward(self, x, labels, w):
         assert w.ndim == 1
         weights = w.unsqueeze(1) * w.unsqueeze(0)
         distance = self.get_dist(x)
@@ -226,27 +205,27 @@ class weight_cross_entropy(nn.Module):
         
 
 if __name__ == '__main__':
-    logit = torch.randn(4, 5)
-    label = torch.randint(0, 5, (4,)).long()
-    weight = torch.randn(4)
-    wce = weight_cross_entropy(0.3)
-    ce = nn.CrossEntropyLoss()
-    loss1 = wce(logit, label, weight)
-    loss2 = ce(logit, label)
-    print(loss1, loss2)
-    # from reidlib.utils.parsing import get_weight
-    # a = torch.tensor([
-    #     [1, 0, 0],
-    #     [0, 3, 0],
-    #     [0, 0, 0],
-    #     [1, 1, 0],
-    #     [1, 10, 0],
-    #     [0, 0, 0]
-    # ], dtype=torch.float32)
-    # mask = torch.randint(0, 2, (6, 4, 16, 16))
-    # w = get_weight(mask)
-    # print(w.shape, w[:, 1:2].shape, w[:, 1].shape)
-    # la = torch.tensor([1, 1, 1, 2, 2, 2])
-    # lossfunc_my = weighted_triplet_hard_loss(margin=1.2)
-    # loss = lossfunc_my(a, w[:, 1], la)
+    # logit = torch.randn(4, 5)
+    # label = torch.randint(0, 5, (4,)).long()
+    # weight = torch.randn(4)
+    # wce = weight_cross_entropy(0.3)
+    # ce = nn.CrossEntropyLoss()
+    # loss1 = wce(logit, label, weight)
+    # loss2 = ce(logit, label)
+    # print(loss1, loss2)
+    from reidlib.utils.parsing import get_weight
+    a = torch.tensor([
+        [1, 0, 0],
+        [0, 3, 0],
+        [0, 0, 0],
+        [1, 1, 0],
+        [1, 10, 0],
+        [0, 0, 0]
+    ], dtype=torch.float32)
+    mask = torch.randint(0, 2, (6, 4, 16, 16))
+    w = get_weight(mask)
+    print(w.shape, w[:, 1:2].shape, w[:, 1].shape)
+    la = torch.tensor([1, 1, 1, 2, 2, 2])
+    lossfunc_my = weighted_triplet_hard_loss(margin=1.2)
+    loss = lossfunc_my(a, w[:, 1], la)
 
