@@ -180,12 +180,10 @@ def train_one_epoch(model, branches, nr_mask, train_loader, losses, optimizer, s
                 mask = masks[:, b-1: b, ...]
                 f, logit = branch(x, mask)
                 w = weights[:, b-1]
-                # pce_loss = losses['cross_entropy_loss'][b](logit, labels, w)
-                # ptriplet_hard_loss = losses['triplet_hard_loss'][b](
-                #     f, w, labels)
+                pce_loss = losses['cross_entropy_loss'][b](logit, labels, w)
                 ptriplet_hard_loss = losses['triplet_hard_loss'][b](
                     f, labels, w)
-                # parsing_celoss[b-1] = Config.weight_ce[b] * pce_loss
+                parsing_celoss[b-1] = Config.weight_ce[b] * pce_loss
                 parsing_triloss[b-1] = Config.weight_tri[b] * ptriplet_hard_loss
             loss = loss + sum(parsing_celoss) + sum(parsing_triloss)
 
@@ -201,8 +199,8 @@ def train_one_epoch(model, branches, nr_mask, train_loader, losses, optimizer, s
         time_spent = batch_end_time - batch_start_time
         dist_ap, dist_an = losses['triplet_hard_loss'][0].get_mean_hard_dist()
         perform = {}
-        # for i in range(nr_mask):
-        #     perform.update({'p%d_ce' % (i+1): float(parsing_celoss[i])})
+        for i in range(nr_mask):
+            perform.update({'p%d_ce' % (i+1): float(parsing_celoss[i])})
         for i in range(nr_mask):
             perform.update({'p%d_tri' % (i+1): float(parsing_triloss[i])})
         perform.update({'ce': float(Config.weight_ce[0] * ce_loss),
@@ -310,9 +308,10 @@ def prepare(args):
 
     losses = {}
     losses['cross_entropy_loss'] = [torch.nn.CrossEntropyLoss(),
-                                    weight_cross_entropy(Config.ce_thres[0]), weight_cross_entropy(
-                                        Config.ce_thres[1]),
-                                    weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
+                                    weight_cross_entropy(Config.ce_thres[0]), 
+                                    weight_cross_entropy(Config.ce_thres[1]),
+                                    weight_cross_entropy(Config.ce_thres[2]), 
+                                    weight_cross_entropy(Config.ce_thres[3])]
     losses['triplet_hard_loss'] = [triplet_hard_loss(margin=Config.triplet_margin),
                                    weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
                                    weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
@@ -336,6 +335,8 @@ def prepare(args):
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
+        for i in range(len(branches)):
+            branches[i].load_state_dict(checkpoint['branch%d'%i])
 
     # continue training for next the epoch of the checkpoint, or simply start from 1
     start_epoch += 1
@@ -390,6 +391,8 @@ def start(model, branches, train_loader, test_loader, optimizer, scheduler, loss
                          'scheduler': scheduler.state_dict(),
                          'top1': cmc[0],
                          'mAP': mAP}
+            for i, b in enumerate(branches):
+                save_dict.update({'branch%d'%i: b.state_dict()})
             path = os.path.join(Config.model_dir, file_name)
             logger.info('global', 'Save model to {}'.format(path))
             torch.save(save_dict, path)
@@ -398,6 +401,8 @@ def start(model, branches, train_loader, test_loader, optimizer, scheduler, loss
                      'model': model.state_dict(),
                      'optimizer': optimizer.state_dict(),
                      'scheduler': scheduler.state_dict()}
+        for i, b in enumerate(branches):
+            save_dict.update({'branch%d'%i: b.state_dict()})
         save_checkpoint(save_dict)
         print('### current best mAP:{:>5.4f} on epoch-{}, best top1:{:>5.4f} on epoch-{}'.format(best_mAP, best_mAP_epoch, best_top1, best_top1_epoch))
     train_end_time = time.time()

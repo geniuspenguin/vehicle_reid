@@ -1,1 +1,1 @@
-export PYTHONPATH=$PYTHONPATH:/home/peng/Documents/FINAL/reidlib
+export PYTHONPATH=/home/peng/Documents/FINAL/reidlib:$PYTHONPATH
