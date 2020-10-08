@@ -132,7 +132,7 @@ dmypy.json
 *.pth
 pretrain/
 runs/
-temp*
+*temp*
 expr_logs/
 output/
 *#*/
