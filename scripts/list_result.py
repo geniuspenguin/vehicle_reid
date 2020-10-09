@@ -12,7 +12,7 @@ if __name__ == '__main__':
     paths = sorted(paths)
     for f in paths:
         print('loading ', f, end=' ')
-        ret = torch.load(f)
+        ret = torch.load(f, map_location='cpu')
         for k, v in ret.items():
             if isinstance(v, int) or isinstance(v, float) or k == 'mAP' or k == 'top1':
                 history[k].append(v)

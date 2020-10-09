@@ -16,7 +16,7 @@ class Config:
     nr_class = 576
     in_planes = 2048
 
-    epoch = 120
+    epoch = 180
     P = 32
     K = 4
     batch_size = int(P*K)
@@ -39,7 +39,7 @@ class Config:
     w_type = 1
     w_color = 1
 
-    nr_worker = 6
+    nr_worker = 2
 
     p_bgswitch = 0
     nr_mask = 4
