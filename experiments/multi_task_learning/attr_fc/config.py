@@ -15,6 +15,7 @@ class Config:
 
     nr_class = 576
     in_planes = 2048
+    num_mid = 512
 
     epoch = 120
     P = 32

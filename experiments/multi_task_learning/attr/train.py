@@ -325,7 +325,7 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
                         optimizer, scheduler, epoch)
 
         if epoch % Config.epoch_per_test == 0:
-            cmc, mAP = test(model, test_loader, losses, epoch)
+            cmc, mAP, acc_type, acc_color = test(model, test_loader, losses, epoch)
             top1 = cmc[0]
             if top1 > best_top1:
                 best_top1 = top1

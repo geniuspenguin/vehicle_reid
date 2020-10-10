@@ -232,7 +232,7 @@ def prepare(args):
     check_config_dir()
     logger.info('setting', config_info(), time_report=False)
 
-    model = Baseline(num_classes=Config.nr_class)
+    model = Baseline(num_classes=Config.nr_class, num_mid=Config.num_mid)
     logger.info('setting', model_summary(model), time_report=False)
     logger.info('setting', str(model), time_report=False)
 
@@ -325,7 +325,7 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
                         optimizer, scheduler, epoch)
 
         if epoch % Config.epoch_per_test == 0:
-            cmc, mAP = test(model, test_loader, losses, epoch)
+            cmc, mAP, acc_type, acc_color = test(model, test_loader, losses, epoch)
             top1 = cmc[0]
             if top1 > best_top1:
                 best_top1 = top1

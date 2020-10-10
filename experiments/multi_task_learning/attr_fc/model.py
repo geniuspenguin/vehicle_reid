@@ -19,23 +19,27 @@ class Baseline(nn.Module):
             self.backbone._ImageNet_pretrained()
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.num_classes = num_classes
+        self.num_mid = num_mid
 
         self.bn = nn.BatchNorm1d(self.in_planes)
-        self.bn.bias.requires_grad_(False)  # no shift
-        self.fc = nn.Linear(self.in_planes, self.num_classes, bias=False)
-
         self.bn.apply(weights_init_kaiming)
-        self.fc.apply(weights_init_classifier)
 
         self.fc_mid = nn.Linear(self.in_planes, num_mid)
         self.bn_mid = nn.BatchNorm1d(num_mid)
+        self.bn_mid.bias.requires_grad_(False)  # no shift
         self.relu_mid = nn.ReLU()
+        self.fc_mid.apply(weights_init_kaiming)
+        self.bn_mid.apply(weights_init_kaiming)
+
 
         self.type_fc = nn.Linear(self.num_mid, nr_type, bias=False)
         self.type_fc.apply(weights_init_classifier)
 
-        self.color_fc = nn.Linear(self.in_planes, nr_color, bias=False)
+        self.color_fc = nn.Linear(self.num_mid, nr_color, bias=False)
         self.color_fc.apply(weights_init_classifier)
+
+        self.fc = nn.Linear(self.num_mid, self.num_classes, bias=False)
+        self.fc.apply(weights_init_classifier)
 
     def forward(self, x):
         x = self.backbone(x)
@@ -43,11 +47,13 @@ class Baseline(nn.Module):
         global_feats = global_feats.view(
             global_feats.shape[0], -1)  # flatten to (bs, 2048)
         feats = self.bn(global_feats)  # normalize for angular softmax
+        feats = self.fc_mid(feats)
+        feats = self.bn_mid(feats)
+
         logits_type = self.type_fc(feats)
         logits_color = self.color_fc(feats)
         if self.training:
             cls_score = self.fc(feats)
             return feats, cls_score, logits_type, logits_color
         else:
-            feats = nn.functional.normalize(feats, dim=1, p=2)
             return feats, logits_type, logits_color
