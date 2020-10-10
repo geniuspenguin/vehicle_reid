@@ -55,18 +55,18 @@ class main_branch(nn.Module):
             return gapx
 
 class parsing_branch(nn.Module):
-    def __init__(self, nr_class, in_planes):
+    def __init__(self, nr_class, in_planes, midnum):
         super().__init__()
         self.nr_class = nr_class
         self.in_planes = in_planes
         self.maskap = MaskAveragePooling()
         self.bn = nn.BatchNorm1d(self.in_planes)
-        self.fc_1024 = nn.Linear(self.in_planes, 1024)
-        self.bn_1024 = nn.BatchNorm1d(1024)
-        self.fc_cls = nn.Linear(1024, self.nr_class, bias=False)
+        self.fc_mid = nn.Linear(self.in_planes, midnum)
+        self.bn_mid = nn.BatchNorm1d(midnum)
+        self.fc_cls = nn.Linear(midnum, self.nr_class, bias=False)
 
-        self.fc_1024.apply(weights_init_kaiming)
-        self.bn_1024.apply(weights_init_kaiming)
+        self.fc_mid.apply(weights_init_kaiming)
+        self.bn_mid.apply(weights_init_kaiming)
         self.fc_cls.apply(weights_init_classifier)
         self.bn.apply(weights_init_kaiming)
         
@@ -75,8 +75,8 @@ class parsing_branch(nn.Module):
         mapx = self.maskap(x, mask)
         mapx = self.bn(mapx)
 
-        feats = self.fc_1024(mapx)
-        feats = self.bn_1024(feats)
+        feats = self.fc_mid(mapx)
+        feats = self.bn_mid(feats)
 
         if self.training:
             logits = self.fc_cls(feats)

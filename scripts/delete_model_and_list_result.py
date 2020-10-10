@@ -27,3 +27,4 @@ if __name__ == '__main__':
 
     for k, v in history.items():
         print("[{}]max:{:.5f}  min:{:.5f}".format(k, max(v), min(v)))
+        

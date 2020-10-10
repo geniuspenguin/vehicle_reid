@@ -266,10 +266,10 @@ def prepare(args):
     logger.info('setting', str(model), time_report=False)
 
     branches = [main_branch(Config.nr_class, Config.in_planes),
-                parsing_branch(Config.nr_class, Config.in_planes),
-                parsing_branch(Config.nr_class, Config.in_planes),
-                parsing_branch(Config.nr_class, Config.in_planes),
-                parsing_branch(Config.nr_class, Config.in_planes)]
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum)]
 
     train_transforms = transforms.Compose([
         transforms.ToPILImage(),

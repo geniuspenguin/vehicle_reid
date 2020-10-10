@@ -16,7 +16,7 @@ class Config:
     nr_class = 576
     in_planes = 2048
 
-    epoch = 180
+    epoch = 120
     P = 32
     K = 4
     batch_size = int(P*K)
@@ -24,10 +24,9 @@ class Config:
     weight_decay = 5e-4
     lr = 3.5e-4
     triplet_margin = 1.2
-    # 0: main brach loss 1: front branch loss 2: backward branch loss
-    # 3: top branch loss 4: side branch loss
-    weight_ce = [1, 0.1, 0.1, 0.1, 0.1]
-    weight_tri = [1, 16, 16, 16, 16]
+    weight_ce = 1
+    weight_tri = 1
+    weight_center = 0.0005
 
     batch_per_log = 1
     epoch_per_test = 5
@@ -39,16 +38,7 @@ class Config:
     w_type = 1
     w_color = 1
 
-    nr_worker = 2
-
-    p_bgswitch = 0
-    nr_mask = 4
-
-    branch_margin = 1.2
-    soft_marigin = True
-    ce_thres = [0.6, 0.6, 1, 0.4]
-    # 0: front branch loss 1: backward branch loss
-    # 2: top branch loss 3: side branch loss
+    nr_worker = 1
 
 
 def config_info():
