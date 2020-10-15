@@ -229,8 +229,8 @@ class CenterLoss(nn.Module):
         loss = dist.mean()
         return loss
 
-class weight_cross_entropy(nn.Module):
-    def __init__(self, mask_thres, eps=1e-10):
+class thres_cross_entropy(nn.Module):
+    def __init__(self, mask_thres, eps=1):
         super().__init__()
         self.mask_thres = mask_thres
         self.eps = eps
@@ -247,6 +247,27 @@ class weight_cross_entropy(nn.Module):
         logpy = (logp * onehot).sum(axis=1)
         logpy = logpy.reshape(-1)
         loss = logpy * mask
+        loss = loss.sum() / (mask.sum() + self.eps)
+        return loss
+
+class thres_weight_cross_entropy(nn.Module):
+    def __init__(self, mask_thres, eps=1):
+        super().__init__()
+        self.mask_thres = mask_thres
+        self.eps = eps
+
+    def forward(self, logits, labels, weight):
+        ''' logits(B, C), weight(B)
+        '''
+        assert labels.dtype == torch.long
+        mask = weight >= self.mask_thres
+        # print(mask.sum())
+        logp = -torch.log_softmax(logits, dim=1)
+        onehot = F.one_hot(labels, num_classes=logp.shape[1])
+        logp += self.eps
+        logpy = (logp * onehot).sum(axis=1)
+        logpy = logpy.reshape(-1)
+        loss = logpy * mask * weight
         loss = loss.sum() / (mask.sum() + self.eps)
         return loss
         

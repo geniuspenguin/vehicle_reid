@@ -27,10 +27,10 @@ class Baseline(nn.Module):
         self.bn.apply(weights_init_kaiming)
         self.fc.apply(weights_init_classifier)
 
-        self.type_fc = nn.Linear(self.in_planes, nr_type, bias=False)
+        self.type_fc = nn.Linear(self.in_planes, nr_type, bias=True)
         self.type_fc.apply(weights_init_classifier)
 
-        self.color_fc = nn.Linear(self.in_planes, nr_color, bias=False)
+        self.color_fc = nn.Linear(self.in_planes, nr_color, bias=True)
         self.color_fc.apply(weights_init_classifier)
 
     def forward(self, x):

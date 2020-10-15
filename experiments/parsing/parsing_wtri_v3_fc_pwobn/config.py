@@ -15,7 +15,7 @@ class Config:
 
     nr_class = 576
     in_planes = 2048
-    parsing_mid_num = 1024
+    midnum = 1024
 
     epoch = 180
     P = 32
@@ -25,6 +25,10 @@ class Config:
     weight_decay = 5e-4
     lr = 3.5e-4
     triplet_margin = 1.2
+    # 0: main brach loss 1: front branch loss 2: backward branch loss
+    # 3: top branch loss 4: side branch loss
+    weight_ce = [1, 0.1, 0.1, 0.1, 0.1]
+    weight_tri = [1, 24, 24, 24, 24]
 
     batch_per_log = 1
     epoch_per_test = 5
@@ -33,25 +37,17 @@ class Config:
     nr_query = 1678
     nr_test = 11579
 
-    w_type = 0.2
-    w_color = 0.2
+    w_type = 1
+    w_color = 1
 
     nr_worker = 2
 
     p_bgswitch = 0
     nr_mask = 4
 
-    # 0: main brach loss 1: front branch loss 2: backward branch loss
-    # 3: top branch loss 4: side branch loss
-    using_wtri = True
-    weight_tri = [1, 24, 24, 24, 24]
     branch_margin = 1.2
     soft_marigin = True
-
-
-    using_pce = False
-    weight_ce = [1, 0.1, 0.1, 0.1, 0.1]
-    ce_thres = [0.11, 0.23, 0.11, 0.25]
+    ce_thres = [0.6, 0.6, 1, 0.4]
     # 0: front branch loss 1: backward branch loss
     # 2: top branch loss 3: side branch loss
 
