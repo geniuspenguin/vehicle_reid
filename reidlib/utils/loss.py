@@ -266,6 +266,9 @@ class weight_cross_entropy(nn.Module):
         loss = loss.sum() / (mask.sum() + self.eps)
         return loss
 
+# multi-name class, no time to fix
+thres_cross_entropy = weight_cross_entropy
+
 class thres_weight_cross_entropy(nn.Module):
     def __init__(self, mask_thres, eps=1):
         super().__init__()

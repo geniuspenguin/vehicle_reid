@@ -116,5 +116,3 @@ if __name__ == '__main__':
         for i, (k, v) in enumerate(dic.items()):
             if i < 3:
                 print(k, v)
-            if 'mask_path' not in v:
-                print('###', k, v)
