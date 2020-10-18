@@ -166,6 +166,22 @@ class weighted_triplet_batch_all_loss(triplet_hard_loss_base):
     def get_mean_hard_dist(self):
         raise NotImplementedError
 
+class triplet_batch_all_loss(triplet_hard_loss_base):
+    def __init__(self, margin, sqrt=True, soft_margin=True, relu_on_wtri=False):
+        super().__init__(margin=margin, sqrt=sqrt)
+        self.soft_margin = soft_margin
+        self.relu_on_wtri = relu_on_wtri
+
+    def forward(self, x, labels):
+        weights = torch.ones((x.shape[0], x.shape[0])).cuda()
+        distance = self.get_dist(x)
+        loss = _weighted_triplet_loss(distance, labels, labels, weights, relu_on_wtri=self.relu_on_wtri,
+                                           margin=self.margin, soft_margin=self.soft_margin)
+        return loss
+        
+    def get_mean_hard_dist(self):
+        raise NotImplementedError
+
 
 class tri_hard_attn(triplet_hard_loss_base):
     def __init__(self, temp=0.1, margin=1.2, sqrt=True):
@@ -229,7 +245,7 @@ class CenterLoss(nn.Module):
         loss = dist.mean()
         return loss
 
-class thres_cross_entropy(nn.Module):
+class weight_cross_entropy(nn.Module):
     def __init__(self, mask_thres, eps=1):
         super().__init__()
         self.mask_thres = mask_thres
