@@ -3,7 +3,7 @@ from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
 from reidlib.models.resnet_ibn import resnet50_ibn_a
-from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_hard_loss, thres_cross_entropy
+from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_hard_loss, weight_cross_entropy
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
 from model import Backbone, main_branch, parsing_branch
@@ -310,9 +310,9 @@ def prepare(args):
 
     losses = {}
     losses['cross_entropy_loss'] = [torch.nn.CrossEntropyLoss(),
-                                    thres_cross_entropy(Config.ce_thres[0]), thres_cross_entropy(
+                                    weight_cross_entropy(Config.ce_thres[0]), weight_cross_entropy(
                                         Config.ce_thres[1]),
-                                    thres_cross_entropy(Config.ce_thres[2]), thres_cross_entropy(Config.ce_thres[3])]
+                                    weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
     losses['triplet_hard_loss'] = [triplet_hard_loss(margin=Config.triplet_margin),
                                    weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
                                    weighted_triplet_hard_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin),
