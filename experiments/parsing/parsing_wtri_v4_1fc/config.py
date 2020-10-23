@@ -28,7 +28,7 @@ class Config:
     # 0: main brach loss 1: front branch loss 2: backward branch loss
     # 3: top branch loss 4: side branch loss
     weight_ce = [1, 0.1, 0.1, 0.1, 0.1]
-    weight_tri = [1, 24, 24, 24, 24]
+    weight_tri = [1, 16, 16, 16, 16]
 
     batch_per_log = 1
     epoch_per_test = 5

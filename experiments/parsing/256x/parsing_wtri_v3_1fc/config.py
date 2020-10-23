@@ -11,7 +11,7 @@ class Config:
 
     checkpoint_path = os.path.join(log_dir, 'latest.pth')
 
-    input_shape = (224, 224)
+    input_shape = (256, 256)
 
     nr_class = 576
     in_planes = 2048

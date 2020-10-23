@@ -76,6 +76,26 @@ def _weighted_triplet_loss(distance, q_ids, g_ids, weights, margin, soft_margin=
     loss = valid_triplet.mean()
     return loss
 
+def _weighted_triplet_loss_v4(distance, q_ids, g_ids, weights, margin):
+    '''
+        weighted triplet loss with batch-all sampler
+    '''
+    pos_mask = torch.eq(q_ids.unsqueeze(1), g_ids.unsqueeze(0))
+    neg_mask = ~pos_mask
+
+    pos_dis = distance[pos_mask]
+    neg_dis = distance[neg_mask]
+
+    pos_w = weights[pos_mask]
+    neg_w = weights[neg_mask]
+
+    w_tri = pos_w.unsqueeze(1) * neg_w.unsqueeze(0)
+    triplet = pos_dis.unsqueeze(1) - neg_dis.unsqueeze(0) + margin
+    mask = (triplet > 0).float()
+    valid_triplet = triplet * mask * w_tri
+    loss = valid_triplet.mean()
+    return loss
+
 def _triplet_hard_loss_new(distance, q_ids, g_ids, margin):
     positive_mask = (q_ids.reshape(-1, 1) == g_ids.reshape(1, -1)).float()
     negative_mask = 1 - positive_mask
@@ -161,6 +181,22 @@ class weighted_triplet_batch_all_loss(triplet_hard_loss_base):
         distance = self.get_dist(x)
         loss = _weighted_triplet_loss(distance, labels, labels, weights, relu_on_wtri=self.relu_on_wtri,
                                            margin=self.margin, soft_margin=self.soft_margin)
+        return loss
+        
+    def get_mean_hard_dist(self):
+        raise NotImplementedError
+
+class weighted_triplet_batch_all_loss_v4(triplet_hard_loss_base):
+    def __init__(self, margin, sqrt=True, soft_margin=True, relu_on_wtri=False):
+        super().__init__(margin=margin, sqrt=sqrt)
+        self.soft_margin = soft_margin
+        self.relu_on_wtri = relu_on_wtri
+
+    def forward(self, x, labels, w):
+        assert w.ndim == 1
+        weights = w.unsqueeze(1) * w.unsqueeze(0)
+        distance = self.get_dist(x)
+        loss = _weighted_triplet_loss_v4(distance, labels, labels, weights, margin=self.margin)
         return loss
         
     def get_mean_hard_dist(self):
