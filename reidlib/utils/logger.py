@@ -5,6 +5,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchsummary import summary
 from termcolor import colored
 import torchsummary
+import os.path as osp
 
 
 def sec2min_sec(start, end):
@@ -21,6 +22,7 @@ class Logger(SummaryWriter):
         self.time_color = time_color
         self.tag_color = tag_color
         self.stage_color = stage_color
+        self.txt = open(osp.join(self.log_dir, 'log.txt'), 'a')
 
     def info(self, tag, text, stage=None, time_report=True):
         clock = ''
@@ -42,6 +44,7 @@ class Logger(SummaryWriter):
         print('{}{}{}{}'.format(clock_print, tag_print, stage_print, text))
         text = stage_str + text
         super().add_text(tag, '[{}]{}'.format(clock, text))
+        self.txt.write('\n[{}][{}]{}'.format(clock, tag, text))
 
     def add_text(self, tag, text, time_report=True):
         clock = ''
