@@ -102,13 +102,6 @@ class Veri776_train(data.Dataset):
 
         # img = self.imgs_ram[idx]
         img = Image.open(path).convert('RGB')
-        if self.bg_switch != 0:
-            mask = Image.open(self.metas[idx]['mask_path'])
-            target_id = np.random.choice(len(self.metas), 1)[0]
-            img_target = Image.open(self.metas[target_id]['path']).convert('RGB')
-            mask_target = Image.open(self.metas[target_id]['mask_path'])
-            img = background_switch(img, img_target, mask, mask_target, self.bg_switch)
-        img = np.array(img)
 
         if self.transforms:
             img = self.transforms(img)

@@ -15,6 +15,7 @@ class Config:
 
     nr_class = 576
     in_planes = 2048
+    midnum = 1024
 
     epoch = 80
     P = 6
@@ -23,10 +24,12 @@ class Config:
 
     weight_decay = 5e-4
     triplet_margin = 0
-    weight_ce = 1
-    weight_tri = 1
+    # 0: main brach loss 1: front branch loss 2: backward branch loss
+    # 3: top branch loss 4: side branch loss
+    weight_ce = [1, 0, 0, 0, 0]
+    weight_tri = [1, 1, 1, 1, 1]
 
-    batch_per_log = 5
+    batch_per_log = 1
     epoch_per_test = 5
     epoch_per_save = 5
 
@@ -37,6 +40,15 @@ class Config:
     w_color = 1
 
     nr_worker = 4
+
+    p_bgswitch = 0
+    nr_mask = 4
+
+    # 0: front branch loss 1: backward branch loss
+    # 2: top branch loss 3: side branch loss
+    branch_margin = 1.2
+    soft_marigin = True
+    ce_thres = [0.6, 0.6, 1, 0.4]
 
     # warmup lr
     momentum = 0.9

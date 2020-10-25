@@ -2,11 +2,10 @@ from reidlib.dataset.dataset import Veri776_train, Veri776_test
 from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
-from reidlib.utils.loss import triplet_hard_loss
-from ai3_loss import TripletLoss
+from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_batch_all_loss, weight_cross_entropy
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
-from model import Baseline
+from model import Backbone, main_branch, parsing_branch
 import time
 import numpy as np
 import torchvision.transforms as transforms
@@ -16,7 +15,9 @@ from tqdm import tqdm
 from reidlib.utils.utils import no_grad_func
 import argparse
 import torch.cuda.amp as amp
+from reidlib.utils.parsing import get_weight
 from reidlib.utils.timer import wait
+from ai3_loss import TripletLoss
 from bisect import bisect_right
 
 batch_step = 1
@@ -54,6 +55,28 @@ def parm_list_with_Wdecay(model):
     return param_list
 
 
+def parm_list_with_Wdecay_multi(models):
+    conv_and_fc_param_list, bn_param_list = [], []
+    for model in models:
+        for name, param in model.named_parameters():
+            if 'bn' in name:
+                bn_param_list.append(param)
+            else:
+                conv_and_fc_param_list.append(param)
+
+    param_list = [
+        {
+            'params': conv_and_fc_param_list,
+            'weight_decay': Config.weight_decay,
+        },
+        {
+            'params': bn_param_list,
+            'weight_decay': 0.0,
+        },
+    ]
+    return param_list
+
+
 def lr_multi_func(epoch):
     epoch += 1
     if epoch < Config.warmup_epoch:
@@ -64,8 +87,9 @@ def lr_multi_func(epoch):
     expo = bisect_right(Config.milestones, epoch)
     return wm_factor * Config.gamma ** expo
 
+
 @no_grad_func
-def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
+def test(model, branches, test_loader, losses, epoch, nr_query=Config.nr_query):
     '''
     return: cmc1, mAP
     test model on testset and save result to log.
@@ -74,13 +98,13 @@ def test(model, test_loader, losses, epoch, nr_query=Config.nr_query):
     model.eval()
     all_features, all_labels, all_cids = [], [], []
     history = collections.defaultdict(list)
-
+    for branch in branches:
+        branch.eval()
     for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        f_norm = model(imgs)
-        # triplet_hard_loss = losses['triplet_hard_loss'](f_norm, labels)
-        # history['triplet_loss'].append(float(triplet_hard_loss))
-        all_features.append(f_norm.cpu().detach().numpy())
+        x = model(imgs)
+        f_main = branches[0](x)
+        all_features.append(f_main.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
 
@@ -118,7 +142,7 @@ def get_lr_from_optim(optim):
         return param_group['lr']
 
 
-def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
+def train_one_epoch(model, branches, nr_mask, train_loader, losses, optimizer, scheduler, epoch):
     global batch_step
 
     epoch_start_time = time.time()
@@ -127,20 +151,42 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
 
     scaler = amp.GradScaler()
     model.train()
+    for branch in branches:
+        branch.train()
     history = collections.defaultdict(list)
-    for i, (imgs, labels) in enumerate(train_loader):
+    for i, (imgs, labels, masks) in enumerate(train_loader):
 
         batch = i + 1
         batch_start_time = time.time()
 
-        imgs, labels = imgs.cuda(), labels.cuda()
+        imgs, labels, masks = imgs.cuda(), labels.cuda(), masks.float().cuda()
 
         with amp.autocast():
-            f, p = model(imgs)
-            ce_loss = losses['cross_entropy_loss'](p, labels)
-            triplet_hard_loss = losses['triplet_hard_loss'](f, labels)
-            loss = Config.weight_ce * ce_loss
-            loss += Config.weight_tri * triplet_hard_loss
+            loss = 0
+            parsing_celoss = [0] * nr_mask
+            parsing_triloss = [0] * nr_mask
+            x = model(imgs)
+            weights = get_weight(masks)
+            f_main, p = branches[0](x)
+            ce_loss = losses['cross_entropy_loss'][0](p, labels)
+            triplet_hard_loss = losses['triplet_hard_loss'][0](f_main, labels)
+            loss += Config.weight_ce[0] * ce_loss
+            loss += Config.weight_tri[0] * triplet_hard_loss
+            for b, branch in enumerate(branches):
+                if b == 0:  # main branch
+                    continue
+                mask = masks[:, b-1: b, ...]
+                f, logit = branch(x, mask)
+                w = weights[:, b-1]
+                # pce_loss = losses['cross_entropy_loss'][b](logit, labels, w)
+                # ptriplet_hard_loss = losses['triplet_hard_loss'][b](
+                #     f, w, labels)
+                ptriplet_hard_loss = losses['triplet_hard_loss'][b](
+                    f, labels, w)
+                # parsing_celoss[b-1] = Config.weight_ce[b] * pce_loss
+                parsing_triloss[b-1] = Config.weight_tri[b] * \
+                    ptriplet_hard_loss
+            loss = loss + sum(parsing_celoss) + sum(parsing_triloss)
 
         scaler.scale(loss).backward()
 
@@ -152,20 +198,24 @@ def train_one_epoch(model, train_loader, losses, optimizer, scheduler, epoch):
         acc = accuracy(p, labels)[0]
         batch_end_time = time.time()
         time_spent = batch_end_time - batch_start_time
-
-        dist_ap, dist_an = losses['triplet_hard_loss'].get_mean_hard_dist()
-        perform = {'ce_loss': float(Config.weight_ce * ce_loss),
-                   'triplet_loss': float(Config.weight_tri * triplet_hard_loss),
-                   'dist_ap_hard': float(dist_ap),
-                   'dist_an_hard': float(dist_an),
-                   'accuracy': float(acc),
-                   'time(s)': float(time_spent)}
+        dist_ap, dist_an = losses['triplet_hard_loss'][0].get_mean_hard_dist()
+        perform = {}
+        # for i in range(nr_mask):
+        #     perform.update({'p%d_ce' % (i+1): float(parsing_celoss[i])})
+        for i in range(nr_mask):
+            perform.update({'p%d_tri' % (i+1): float(parsing_triloss[i])})
+        perform.update({'ce': float(Config.weight_ce[0] * ce_loss),
+                        'tri': float(Config.weight_tri[0] * triplet_hard_loss),
+                        'dap': float(dist_ap),
+                        'dan': float(dist_an),
+                        'acc': float(acc),
+                        't': float(time_spent)})
 
         if i % Config.batch_per_log == 0:
             stage = (epoch, batch)
             text = ''
             for k, v in perform.items():
-                text += '|{}:{:<8.4f} '.format(k, float(v))
+                text += '|{}:{:<6.4f} '.format(k, float(v))
             logger.info('training', text, stage=stage)
 
         for k, v in perform.items():
@@ -208,9 +258,16 @@ def prepare(args):
     check_config_dir()
     logger.info('setting', config_info(), time_report=False)
 
-    model = Baseline(num_classes=Config.nr_class)
+    model = Backbone()
+    model = model.cuda()
     logger.info('setting', model_summary(model), time_report=False)
     logger.info('setting', str(model), time_report=False)
+
+    branches = [main_branch(Config.nr_class, Config.in_planes),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum),
+                parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum)]
 
     train_transforms = transforms.Compose([
         transforms.Resize(Config.input_shape),
@@ -220,7 +277,7 @@ def prepare(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing()
+        transforms.RandomErasing(),
     ])
 
     test_transforms = transforms.Compose([
@@ -230,7 +287,7 @@ def prepare(args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    trainset = Veri776_train(transforms=train_transforms)
+    trainset = Veri776_train(transforms=train_transforms, need_mask=True)
     testset = Veri776_test(transforms=test_transforms)
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
@@ -239,31 +296,47 @@ def prepare(args):
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 
-    weight_decay_setting = parm_list_with_Wdecay(model)
-    # optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.base_lr)
+    weight_decay_setting = parm_list_with_Wdecay_multi([model] + branches)
+    # optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
     optimizer = torch.optim.SGD(weight_decay_setting, lr=Config.base_lr, momentum=Config.momentum)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lr_multi_func)
 
     losses = {}
-    losses['cross_entropy_loss'] = torch.nn.CrossEntropyLoss()
-    if Config.triplet_margin:
-        losses['triplet_hard_loss'] = triplet_hard_loss(
-            margin=Config.triplet_margin)
-    else:
-        losses['triplet_hard_loss'] = TripletLoss().cuda()
-
+    losses['cross_entropy_loss'] = [torch.nn.CrossEntropyLoss(),
+                                    weight_cross_entropy(Config.ce_thres[0]), weight_cross_entropy(
+                                        Config.ce_thres[1]),
+                                    weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
+    losses['triplet_hard_loss'] = [TripletLoss().cuda(),
+                                   weighted_triplet_batch_all_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
+                                   weighted_triplet_batch_all_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
+                                   weighted_triplet_batch_all_loss(
+                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
+                                   weighted_triplet_batch_all_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True)]
 
     for k in losses.keys():
-        losses[k] = losses[k].cuda()
+        if isinstance(losses[k], list):
+            for i in range(len(losses[k])):
+                losses[k][i] = losses[k][i].cuda()
+        else:
+            losses[k] = losses[k].cuda()
+
+    for i in range(len(branches)):
+        branches[i] = branches[i].cuda()
 
     start_epoch = 0
     if resume_from_checkpoint and os.path.exists(Config.checkpoint_path):
         checkpoint = load_checkpoint()
         start_epoch = checkpoint['epoch']
+        global batch_step 
+        batch_step = checkpoint['batch_step']
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
+        for i, branch in enumerate(branches):
+            branch.load_state_dict(checkpoint['branch_%d' % i])
 
     # continue training for next the epoch of the checkpoint, or simply start from 1
     start_epoch += 1
@@ -271,6 +344,7 @@ def prepare(args):
     ret = {
         'start_epoch': start_epoch,
         'model': model,
+        'branches': branches,
         'train_loader': train_loader,
         'test_loader': test_loader,
         'optimizer': optimizer,
@@ -285,7 +359,7 @@ def prepare(args):
     return ret
 
 
-def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_epoch,):
+def start(model, branches, train_loader, test_loader, optimizer, scheduler, losses, start_epoch,):
     train_start_time = time.time()
 
     best_mAP = 0.0
@@ -295,11 +369,11 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
 
     logger.info('global', 'Start training.')
     for epoch in range(start_epoch, Config.epoch + 1):
-        train_one_epoch(model, train_loader, losses,
+        train_one_epoch(model, branches, Config.nr_mask, train_loader, losses,
                         optimizer, scheduler, epoch)
 
         if epoch % Config.epoch_per_test == 0:
-            cmc, mAP = test(model, test_loader, losses, epoch)
+            cmc, mAP = test(model, branches, test_loader, losses, epoch)
             top1 = cmc[0]
             if top1 > best_top1:
                 best_top1 = top1
@@ -310,23 +384,29 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
 
         if epoch % Config.epoch_per_save == 0:
             if Config.epoch_per_test % Config.epoch_per_save != 0:
-                cmc, mAP = test(model, test_loader, losses, epoch)
+                cmc, mAP = test(model, branches, test_loader, losses, epoch)
             file_name = 'epoch-{:0>3}'.format(epoch) + '.pth'
             save_dict = {'model': model.state_dict(),
                          'optimizer': optimizer.state_dict(),
                          'scheduler': scheduler.state_dict(),
                          'top1': cmc[0],
                          'mAP': mAP}
+            for i, branch in enumerate(branches):
+                save_dict.update({'branch_%d' % i: branch.state_dict()})
             path = os.path.join(Config.model_dir, file_name)
             logger.info('global', 'Save model to {}'.format(path))
             torch.save(save_dict, path)
 
         save_dict = {'epoch': epoch,
+                     'batch_step': batch_step,
                      'model': model.state_dict(),
                      'optimizer': optimizer.state_dict(),
                      'scheduler': scheduler.state_dict()}
+        for i, branch in enumerate(branches):
+            save_dict.update({'branch_%d' % i: branch.state_dict()})
         save_checkpoint(save_dict)
-        print('### current best mAP:{:>5.4f} on epoch-{}, best top1:{:>5.4f} on epoch-{}'.format(best_mAP, best_mAP_epoch, best_top1, best_top1_epoch))
+        print('### current best mAP:{:>5.4f} on epoch-{}, best top1:{:>5.4f} on epoch-{}'.format(
+            best_mAP, best_mAP_epoch, best_top1, best_top1_epoch))
     train_end_time = time.time()
     time_spent = sec2min_sec(train_start_time, train_end_time)
 

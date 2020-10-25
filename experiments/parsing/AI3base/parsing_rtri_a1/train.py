@@ -2,7 +2,6 @@ from reidlib.dataset.dataset import Veri776_train, Veri776_test
 from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
-from reidlib.models.resnet_ibn import resnet50_ibn_a
 from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_batch_all_loss, weight_cross_entropy
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
@@ -18,6 +17,8 @@ import argparse
 import torch.cuda.amp as amp
 from reidlib.utils.parsing import get_weight
 from reidlib.utils.timer import wait
+from ai3_loss import TripletLoss
+from bisect import bisect_right
 
 batch_step = 1
 logger = Logger(log_dir=Config.log_dir)
@@ -48,7 +49,7 @@ def parm_list_with_Wdecay(model):
         },
         {
             'params': bn_param_list,
-            'weight_decay': 0.0,
+            'weight_decay': Config.weight_decay,
         },
     ]
     return param_list
@@ -78,14 +79,13 @@ def parm_list_with_Wdecay_multi(models):
 
 def lr_multi_func(epoch):
     epoch += 1
-    if epoch <= 10:
-        return epoch / 10
-    if epoch <= 40:
-        return 1
-    if epoch <= 70:
-        return 0.1
+    if epoch < Config.warmup_epoch:
+        alpha = epoch / Config.warmup_epoch
+        wm_factor = Config.warmup_factor * (1 - alpha) + alpha
     else:
-        return 0.01
+        wm_factor = 1
+    expo = bisect_right(Config.milestones, epoch)
+    return wm_factor * Config.gamma ** expo
 
 
 @no_grad_func
@@ -104,8 +104,6 @@ def test(model, branches, test_loader, losses, epoch, nr_query=Config.nr_query):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
         x = model(imgs)
         f_main = branches[0](x)
-        triplet_hard_loss = losses['triplet_hard_loss'][0](f_main, labels)
-        history['triplet_hard_loss'].append(float(triplet_hard_loss))
         all_features.append(f_main.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
@@ -272,19 +270,14 @@ def prepare(args):
                 parsing_branch(Config.nr_class, Config.in_planes, midnum=Config.midnum)]
 
     train_transforms = transforms.Compose([
-        transforms.ToPILImage(),
         transforms.Resize(Config.input_shape),
-        transforms.RandomApply([
-            transforms.ColorJitter(
-                brightness=0.3, contrast=0.3, saturation=0.3, hue=0)
-        ], p=0.5),
         transforms.RandomHorizontalFlip(),
         transforms.Pad(10),
         transforms.RandomCrop(Config.input_shape),
         transforms.ToTensor(),
-        transforms.RandomErasing(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
+                             std=[0.229, 0.224, 0.225]),
+        transforms.RandomErasing(),
     ])
 
     test_transforms = transforms.Compose([
@@ -294,8 +287,7 @@ def prepare(args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    trainset = Veri776_train(transforms=train_transforms,
-                             need_mask=True, bg_switch=Config.p_bgswitch)
+    trainset = Veri776_train(transforms=train_transforms, need_mask=True)
     testset = Veri776_test(transforms=test_transforms)
 
     pksampler = PKSampler(trainset, p=Config.P, k=Config.K)
@@ -305,7 +297,8 @@ def prepare(args):
         testset, batch_size=Config.batch_size, sampler=torch.utils.data.SequentialSampler(testset), num_workers=Config.nr_worker, pin_memory=True)
 
     weight_decay_setting = parm_list_with_Wdecay_multi([model] + branches)
-    optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
+    # optimizer = torch.optim.Adam(weight_decay_setting, lr=Config.lr)
+    optimizer = torch.optim.SGD(weight_decay_setting, lr=Config.base_lr, momentum=Config.momentum)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lr_multi_func)
 
@@ -314,7 +307,7 @@ def prepare(args):
                                     weight_cross_entropy(Config.ce_thres[0]), weight_cross_entropy(
                                         Config.ce_thres[1]),
                                     weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
-    losses['triplet_hard_loss'] = [triplet_hard_loss(margin=Config.triplet_margin),
+    losses['triplet_hard_loss'] = [TripletLoss().cuda(),
                                    weighted_triplet_batch_all_loss(
                                        margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
                                    weighted_triplet_batch_all_loss(

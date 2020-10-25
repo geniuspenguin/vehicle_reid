@@ -1,4 +1,4 @@
-from reidlib.models.resnet_ibn_a import resnet50_ibn_a
+from reidlib.models.resnet_ibn_a import resnet50_ibn_a, r50ibna_path
 import torch
 from torch import nn
 import math
@@ -14,7 +14,9 @@ class Baseline(nn.Module):
     def __init__(self, num_classes, last_stride=1, pretrained=True):
         super(Baseline, self).__init__()
         self.pretrained = pretrained
-        self.backbone = resnet50_ibn_a(last_stride, pretrained=pretrained)
+        self.backbone = resnet50_ibn_a(last_stride, pretrained=False)
+        if pretrained:
+            self.backbone.load_param(r50ibna_path)
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.num_classes = num_classes
 
@@ -35,6 +37,7 @@ class Baseline(nn.Module):
             cls_score = self.fc(feats)
             return global_feats, cls_score
         else:
+            feats = nn.functional.normalize(feats, dim=1, p=2)
             return feats
 
 if __name__ == '__main__':
