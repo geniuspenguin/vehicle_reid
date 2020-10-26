@@ -16,7 +16,7 @@ class Config:
     nr_class = 576
     in_planes = 2048
 
-    epoch = 80
+    epoch = 90
     P = 6
     K = 8
     batch_size = int(P*K)
@@ -26,9 +26,9 @@ class Config:
     weight_ce = 1
     weight_tri = 1
 
-    batch_per_log = 5
-    epoch_per_test = 5
-    epoch_per_save = 5
+    batch_per_log = 1
+    epoch_per_test = 3
+    epoch_per_save = 3
 
     nr_query = 1678
     nr_test = 11579

@@ -326,7 +326,10 @@ def start(model, train_loader, test_loader, optimizer, scheduler, losses, start_
                      'optimizer': optimizer.state_dict(),
                      'scheduler': scheduler.state_dict()}
         save_checkpoint(save_dict)
+        cur_time = time.time()
+        cur_time_spent = sec2min_sec(train_start_time, cur_time)
         print('### current best mAP:{:>5.4f} on epoch-{}, best top1:{:>5.4f} on epoch-{}'.format(best_mAP, best_mAP_epoch, best_top1, best_top1_epoch))
+        print('### current time spent: {:>3}mins {:>3}s'.format(cur_time_spent[0], cur_time_spent[1]))
     train_end_time = time.time()
     time_spent = sec2min_sec(train_start_time, train_end_time)
 

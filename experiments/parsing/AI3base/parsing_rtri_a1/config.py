@@ -18,7 +18,7 @@ class Config:
     midnum = 1024
 
     epoch = 80
-    P = 10
+    P = 6
     K = 8
     batch_size = int(P*K)
 
