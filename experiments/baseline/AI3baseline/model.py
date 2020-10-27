@@ -38,7 +38,7 @@ class Baseline(nn.Module):
             return global_feats, cls_score
         else:
             feats = nn.functional.normalize(feats, dim=1, p=2)
-            return feats
+            return global_feats, feats
 
 if __name__ == '__main__':
     model = Baseline(num_classes=576)

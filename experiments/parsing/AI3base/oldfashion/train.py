@@ -2,7 +2,7 @@ from reidlib.dataset.dataset import Veri776_train, Veri776_test
 from reidlib.dataset.sampler import PKSampler
 from reidlib.utils.logger import Logger, sec2min_sec, model_summary
 from config import Config, config_info
-from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_batch_all_loss, weight_cross_entropy
+from reidlib.utils.loss import triplet_hard_loss, weighted_triplet_softmargin_batch_all_loss, weight_cross_entropy, weighted_triplet_batch_all_loss
 from reidlib.utils.metrics import get_cmc_map, get_L2distance_matrix_numpy, accuracy
 import torch
 from model import Backbone, main_branch, parsing_branch
@@ -97,13 +97,15 @@ def test(model, branches, test_loader, losses, epoch, nr_query=Config.nr_query):
     val_start_time = time.time()
     model.eval()
     all_features, all_labels, all_cids = [], [], []
+    all_gapx = []
     history = collections.defaultdict(list)
     for branch in branches:
         branch.eval()
     for i, (imgs, labels, cids) in tqdm(enumerate(test_loader), desc='testing on epoch-{}'.format(epoch), total=len(test_loader)):
         imgs, labels, cids = imgs.cuda(), labels.cuda(), cids.cuda()
-        x = model(imgs)
+        x_gap, x = model(imgs)
         f_main = branches[0](x)
+        all_gapx.append(x_gap.cpu().detach().numpy())
         all_features.append(f_main.cpu().detach().numpy())
         all_labels.append(labels.cpu().detach().numpy())
         all_cids.append(cids.cpu().detach().numpy())
@@ -111,19 +113,25 @@ def test(model, branches, test_loader, losses, epoch, nr_query=Config.nr_query):
     all_features = np.concatenate(all_features, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
     all_cids = np.concatenate(all_cids, axis=0)
+    all_gapx = np.concatenate(all_gapx, axis=0)
     q_f, g_f = all_features[:nr_query], all_features[nr_query:]
     q_ids, g_ids = all_labels[:nr_query], all_labels[nr_query:]
     q_cids, g_cids = all_cids[:nr_query], all_cids[nr_query:]
+    q_gapx, g_gapx = all_gapx[:nr_query], all_gapx[nr_query:]
 
     print('Computing CMC and mAP')
     distance_matrix = get_L2distance_matrix_numpy(q_f, g_f)
     cmc, mAP = get_cmc_map(distance_matrix, q_ids, g_ids, q_cids, g_cids)
+
+    distance_matrix_gapx = get_L2distance_matrix_numpy(q_gapx, g_gapx)
+    cmc_gapx, mAP_gapx = get_cmc_map(distance_matrix_gapx, q_ids, g_ids, q_cids, g_cids)
+
     val_end_time = time.time()
     time_spent = sec2min_sec(val_start_time, val_end_time)
 
     text = 'testing epoch {:>3}, time spent: [{:>3}mins{:>3}s]:##'.format(
         epoch, time_spent[0], time_spent[1])
-    text += '|CMC1:{:>5.4f} |mAP:{:>5.4f}'.format(cmc[0], mAP)
+    text += '|CMC1:{:>5.4f} |mAP:{:>5.4f} |CMC1_gapx:{:>5.4f} |mAP_gapx:{:>5.4f}'.format(cmc[0], mAP, cmc_gapx[0], mAP_gapx)
     for k, vlist in history.items():
         v = float(mean(vlist))
         text += '|{}:{:>5.4f} '.format(k, v)
@@ -134,7 +142,12 @@ def test(model, branches, test_loader, losses, epoch, nr_query=Config.nr_query):
     logger.add_scalar('TEST/cmc5', cmc[4], epoch)
     logger.add_scalar('TEST/cmc10', cmc[9], epoch)
     logger.add_scalar('TEST/mAP', mAP, epoch)
-    return cmc, mAP
+
+    logger.add_scalar('TEST/cmc1_gapx', cmc_gapx[0], epoch)
+    logger.add_scalar('TEST/cmc5_gapx', cmc_gapx[4], epoch)
+    logger.add_scalar('TEST/cmc10_gapx', cmc_gapx[9], epoch)
+    logger.add_scalar('TEST/mAP_gapx', mAP_gapx, epoch)
+    return cmc, mAP, cmc_gapx, mAP_gapx
 
 
 def get_lr_from_optim(optim):
@@ -307,14 +320,11 @@ def prepare(args):
                                     weight_cross_entropy(Config.ce_thres[0]), weight_cross_entropy(
                                         Config.ce_thres[1]),
                                     weight_cross_entropy(Config.ce_thres[2]), weight_cross_entropy(Config.ce_thres[3])]
-    losses['triplet_hard_loss'] = [TripletLoss().cuda(),
-                                   weighted_triplet_batch_all_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
-                                   weighted_triplet_batch_all_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
-                                   weighted_triplet_batch_all_loss(
-                                       margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True),
-                                   weighted_triplet_batch_all_loss(margin=Config.branch_margin, soft_margin=Config.soft_marigin, relu_on_wtri=True)]
+    losses['triplet_hard_loss'] = [TripletLoss(margin=Config.triplet_margin).cuda(),
+                                   weighted_triplet_batch_all_loss(margin=Config.branch_margin),
+                                   weighted_triplet_batch_all_loss(margin=Config.branch_margin),
+                                   weighted_triplet_batch_all_loss(margin=Config.branch_margin),
+                                   weighted_triplet_batch_all_loss(margin=Config.branch_margin)]
 
     for k in losses.keys():
         if isinstance(losses[k], list):
@@ -367,30 +377,45 @@ def start(model, branches, train_loader, test_loader, optimizer, scheduler, loss
     best_top1 = 0.0
     best_top1_epoch = 0
 
+    best_mAP_gapx = 0.0
+    best_mAP_epoch_gapx = 0
+    best_top1_gapx = 0.0
+    best_top1_epoch_gapx = 0
+
     logger.info('global', 'Start training.')
     for epoch in range(start_epoch, Config.epoch + 1):
         train_one_epoch(model, branches, Config.nr_mask, train_loader, losses,
                         optimizer, scheduler, epoch)
 
         if epoch % Config.epoch_per_test == 0:
-            cmc, mAP = test(model, branches, test_loader, losses, epoch)
+            cmc, mAP, cmc_gapx, mAP_gapx = test(model, branches, test_loader, losses, epoch)
             top1 = cmc[0]
+            top1_gapx = cmc_gapx[0]
             if top1 > best_top1:
                 best_top1 = top1
                 best_top1_epoch = epoch
             if mAP > best_mAP:
                 best_mAP = mAP
                 best_mAP_epoch = epoch
+            if top1_gapx > best_top1_gapx:
+                best_top1_gapx = top1_gapx
+                best_top1_epoch_gapx = epoch
+            if mAP_gapx > best_mAP_gapx:
+                best_mAP = mAP
+                best_mAP_epoch_gapx = epoch
+            
 
         if epoch % Config.epoch_per_save == 0:
             if Config.epoch_per_test % Config.epoch_per_save != 0:
-                cmc, mAP = test(model, branches, test_loader, losses, epoch)
+                cmc, mAP, cmc_gapx, mAP_gapx = test(model, branches, test_loader, losses, epoch)
             file_name = 'epoch-{:0>3}'.format(epoch) + '.pth'
             save_dict = {'model': model.state_dict(),
                          'optimizer': optimizer.state_dict(),
                          'scheduler': scheduler.state_dict(),
                          'top1': cmc[0],
-                         'mAP': mAP}
+                         'mAP': mAP,
+                         'top1_gapx': cmc_gapx[0],
+                         'mAP_gapx': mAP_gapx}
             for i, branch in enumerate(branches):
                 save_dict.update({'branch_%d' % i: branch.state_dict()})
             path = os.path.join(Config.model_dir, file_name)
@@ -405,8 +430,14 @@ def start(model, branches, train_loader, test_loader, optimizer, scheduler, loss
         for i, branch in enumerate(branches):
             save_dict.update({'branch_%d' % i: branch.state_dict()})
         save_checkpoint(save_dict)
-        print('### current best mAP:{:>5.4f} on epoch-{}, best top1:{:>5.4f} on epoch-{}'.format(
-            best_mAP, best_mAP_epoch, best_top1, best_top1_epoch))
+        cur_time = time.time()
+        cur_time_spent = sec2min_sec(train_start_time, cur_time)
+        print_text = '### current best mAP:{:>5.4f} on epoch-{}, best top1:{:>5.4f} on epoch-{}'.format(
+            best_mAP, best_mAP_epoch, best_top1, best_top1_epoch)
+        print_text += 'best mAP_gapx:{:>5.4f} on epoch-{}, best top1_gapx:{:>5.4f} on epoch-{}'.format(
+            best_mAP_gapx, best_mAP_epoch_gapx, best_top1_gapx, best_top1_epoch_gapx)
+        print(print_text)
+        print('### current time spent: {:>3}mins {:>3}s'.format(cur_time_spent[0], cur_time_spent[1]))
     train_end_time = time.time()
     time_spent = sec2min_sec(train_start_time, train_end_time)
 

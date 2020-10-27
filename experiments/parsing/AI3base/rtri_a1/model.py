@@ -54,7 +54,7 @@ class main_branch(nn.Module):
             return gapx, logits
         else:
             feat = nn.functional.normalize(feat, dim=1, p=2)
-            return feat
+            return gapx, feat
 
 class parsing_branch(nn.Module):
     def __init__(self, nr_class, in_planes, midnum):
