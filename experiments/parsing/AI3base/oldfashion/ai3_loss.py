@@ -130,7 +130,7 @@ class TripletLoss(nn.Module):
         dist_an *= (1.0 - self.hard_factor)
 
         y = dist_an.new().resize_as_(dist_an).fill_(1)
-        if self.margin is not None:
+        if self.margin:
             loss = self.ranking_loss(dist_an, dist_ap, y)
         else:
             loss = self.ranking_loss(dist_an - dist_ap, y)

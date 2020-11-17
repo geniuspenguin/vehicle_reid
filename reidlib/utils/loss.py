@@ -196,7 +196,7 @@ class weighted_triplet_hard_loss(triplet_hard_loss_base):
         raise NotImplementedError
 
 class weighted_triplet_batch_all_loss(triplet_hard_loss_base):
-    def __init__(self, margin, sqrt=True, soft_margin=True, relu_on_wtri=False):
+    def __init__(self, margin, sqrt=True, soft_margin=True, relu_on_wtri=True):
         super().__init__(margin=margin, sqrt=sqrt)
         self.soft_margin = soft_margin
         self.relu_on_wtri = relu_on_wtri
