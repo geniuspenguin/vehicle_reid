@@ -63,17 +63,17 @@ class ArcfaceLoss(nn.Module):
         cosine = cosine / norm_x
 
         sine = torch.sqrt(1 - (cosine ** 2).clamp(0, 1))
-        margin = cosine * self.cos_m - sine * self.sin_m
+        margin = (cosine * self.cos_m - sine * self.sin_m).clamp(0, 1)
 
         m_score = cosine * (1 - y_onehot) + margin * y_onehot
-        m_score = self.scale * (m_score - margin)
+        m_score = self.scale * m_score
         # score = torch.exp(score)
         # p = score / torch.sum(score, axis=1, keepdim=True)
         # p = p * y_onehot
         # p = torch.sum(p, axis=1)
         loss = self.ce(m_score, y)
         return loss, cosine
-        
+
 if __name__ == '__main__':
     loss = AMSoftmax(mid_num=50, nr_class=10, scale=30, margin=0.25)
 

@@ -14,6 +14,7 @@ train_path = '/home/peng/Documents/data/VeRi/image_train'
 query_path = '/home/peng/Documents/data/VeRi/image_query'
 gallery_path = '/home/peng/Documents/data/VeRi/image_test'
 pickle_path = '/home/peng/Documents/data/VeRi/data_info.pkl'
+subbm_path = '/home/peng/Documents/data/VeRi/sub_benchmark.pkl'
 type_lines = open(os.path.join(rootdir, 'list_type.txt'), 'r').readlines()
 color_lines = open(os.path.join(rootdir, 'list_color.txt'), 'r').readlines()
 
@@ -137,6 +138,8 @@ class Veri776_test(data.Dataset):
         self.transforms = transforms
         self.need_mask = need_mask
         self.img_shape = img_shape
+        self.nr_query = len(self.q_info)
+        self.nr_gallery = len(self.g_info)
         # self.imgs_ram = self._load_imgs_from_metas()
 
     def _load_imgs_from_metas(self):
@@ -213,6 +216,20 @@ class Veri776_test(data.Dataset):
     def get_num_gallery(self):
         return (self.g_info)
 
+class Sub_benchmark(Veri776_test):
+    def __init__(self, pickle_path=pickle_path, img_shape=(224, 224),
+                 transforms=None, need_attr=False, need_mask=False):
+        self.pickle_path = pickle_path
+        infos = pickle.load(open(subbm_path, 'rb'))
+        self.q_info = infos['query']
+        self.g_info = infos['gallery']
+        self.metas = self.relabel(self.q_info, self.g_info)
+        self.transforms = transforms
+        self.need_mask = need_mask
+        self.img_shape = img_shape
+        self.nr_query = len(self.q_info)
+        self.nr_gallery = len(self.g_info)
+        self.need_attr = need_attr
 
 # def collate_func(batch):
 #     inps, targets, cids = [], [], []

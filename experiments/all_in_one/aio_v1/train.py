@@ -312,7 +312,6 @@ def prepare(args):
                                midnum=Config.parsing_mid_num)]
 
     train_transforms = transforms.Compose([
-        transforms.ToPILImage(),
         transforms.Resize(Config.input_shape),
         transforms.RandomApply([
             transforms.ColorJitter(
